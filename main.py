@@ -5,16 +5,17 @@ import random
 import shutil
 import uuid
 import time
-import openai
+import math
+import tempfile
 import ffmpeg
 import subprocess
 
+from openai import OpenAI
 from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional, Dict
+from pydub import AudioSegment
 
-
-# Third-party imports
 from fastapi import (
     FastAPI,
     HTTPException,
@@ -53,6 +54,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+#
+client = OpenAI(api_key=settings.openai_api_key)
 
 
 # Database setup
@@ -465,9 +469,48 @@ def extract_audio(video_path: str) -> str:
 
 
 def transcribe_audio(audio_path: str) -> str:
-    with open(audio_path, "rb") as audio_file:
-        transcript = openai.Audio.transcribe("whisper-1", audio_file)
-    return transcript["text"]
+
+    # Load audio file using pydub
+    audio = AudioSegment.from_file(audio_path)
+
+    # Calculate the number of chunks needed
+    max_chunk_duration_ms = 15 * 60 * 1000  # 15 minutes in milliseconds
+    num_chunks = math.ceil(len(audio) / max_chunk_duration_ms)
+
+    transcripts = []
+
+    for i in range(num_chunks):
+        start_ms = i * max_chunk_duration_ms
+        end_ms = min((i + 1) * max_chunk_duration_ms, len(audio))
+        chunk = audio[start_ms:end_ms]
+
+        # Export chunk to a temporary file
+        with tempfile.NamedTemporaryFile(
+            suffix=".mp3", delete=False
+        ) as temp_audio_file:
+            chunk.export(temp_audio_file.name, format="mp3")
+            temp_audio_file.close()
+
+            # Transcribe the chunk
+            with open(temp_audio_file.name, "rb") as audio_file:
+                try:
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1", file=audio_file
+                    )
+                    transcripts.append(transcript.text)
+                except Exception as e:
+                    print(f"Error transcribing chunk {i + 1}: {str(e)}")
+
+            # Delete the temporary file
+            os.unlink(temp_audio_file.name)
+
+    # Combine all transcripts
+    combined_transcript = "\n".join(transcripts)
+
+    # Post-process the combined transcript with GPT-4
+    # corrected_transcript = post_process_transcript(combined_transcript)
+
+    return combined_transcript
 
 
 def convert_with_pandoc(file_path: str) -> str:
@@ -720,11 +763,10 @@ async def parse_evidence_for_company(
     ]
 
     # Set the OpenAI API key
-    openai.api_key = settings.openai_api_key
 
     # Call the OpenAI API
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             functions=[company_info_function],
@@ -734,7 +776,7 @@ async def parse_evidence_for_company(
         raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
     # Extract the function call arguments
-    function_call = response["choices"][0]["message"]["function_call"]
+    function_call = response.choices[0].message.function_call
     arguments_str = function_call["arguments"]
 
     # Parse the arguments as JSON

@@ -93,7 +93,7 @@ def mock_ffmpeg(monkeypatch):
 @pytest.fixture
 def mock_openai(monkeypatch):
     mock = MagicMock()
-    monkeypatch.setattr(openai.Audio, "transcribe", mock.transcribe)
+    monkeypatch.setattr(openai.resources.Audio, "transcribe", mock.transcribe)
     return mock
 
 
