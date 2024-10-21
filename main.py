@@ -1,3 +1,65 @@
+"""
+TechAudit: Comprehensive Technology and Product Audit System
+
+This codebase implements a sophisticated system for conducting technology and product audits
+of companies across various sectors and sizes. The primary goal is to assess the maturity
+and effectiveness of a company's technology stack, processes, and product development approaches.
+
+Key Concepts:
+
+1. Audit Framework:
+   The system is built around the concept of the "5 Ps": Product, People, Process, Platform,
+   and Protection. These form the core areas of assessment in any audit.
+
+2. Maturity Levels:
+   For each area and sub-area of assessment, the system uses three maturity levels:
+   Novice, Intermediate, and Advanced. These levels are defined specifically for each
+   criterion to provide nuanced evaluation.
+
+3. Evidence-Based Assessment:
+   The audit process is driven by evidence gathered from various sources including
+   interviews, documentation, code repositories, and system logs. The system supports
+   uploading and processing of multiple file types to extract relevant information.
+
+4. Dynamic Questioning:
+   Based on the criteria and gathered evidence, the system generates tailored questions
+   to fill information gaps. This process is iterative, with follow-up questions generated
+   based on previous answers.
+
+5. AI-Assisted Analysis:
+   The system leverages large language models to assist in various tasks such as evidence
+   extraction, question generation, and initial maturity assessments. However, final
+   assessments are made by human auditors.
+
+6. Customizable Criteria:
+   While there's a standard set of criteria, the system allows for customization of
+   criteria for specific audits, recognizing that different companies and sectors may
+   have unique requirements.
+
+7. Company Context:
+   The system takes into account the size, sector, and specific context of each company
+   being audited, adjusting expectations and assessments accordingly.
+
+8. Comprehensive Reporting:
+   The end result of the audit process is a detailed report highlighting the company's
+   strengths, areas for improvement, and specific recommendations, tailored to different
+   audience levels (e.g., technical teams, management, board level).
+
+Technical Overview:
+
+- The system is built using FastAPI, providing a robust and fast API for all operations.
+- SQLAlchemy is used for ORM, with models representing key entities like Audits, Companies,
+  Criteria, Evidence, Questions, and Maturity Assessments.
+- Asynchronous processing is employed for handling file uploads and content extraction.
+- Integration with OpenAI's API allows for AI-assisted analysis and question generation.
+- The system is designed to be scalable, supporting concurrent audits and large volumes
+  of evidence processing.
+
+This codebase represents a sophisticated tool for technology auditing, combining
+structured assessment methodologies with AI-assisted analysis to provide comprehensive
+and nuanced evaluations of a company's technology and product maturity.
+"""
+
 # Standard library imports
 import json
 import os
@@ -9,11 +71,19 @@ import math
 import tempfile
 import ffmpeg
 import subprocess
+import base64
+import pypandoc
+import re
+import hashlib
+import logging
+import secrets
 
+
+from bs4 import BeautifulSoup
 from openai import OpenAI
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from enum import Enum
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from pydub import AudioSegment
 
 from fastapi import (
@@ -24,11 +94,18 @@ from fastapi import (
     UploadFile,
     status,
     BackgroundTasks,
+    Query,
+    Request,
+    Body,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
 from pydantic import BaseModel, Field, field_validator, ConfigDict, validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from sqlalchemy import (
     create_engine,
     Column,
@@ -40,23 +117,71 @@ from sqlalchemy import (
     JSON,
     DateTime,
     func,
+    and_,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship, selectinload
+from sqlalchemy.ext.mutable import MutableList
+from sqlalchemy.orm import (
+    sessionmaker,
+    Session,
+    relationship,
+    selectinload,
+    backref,
+    joinedload,
+)
+from sqlalchemy.sql import expression
+from sqlalchemy.types import JSON
+
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_auth_requests
+
+from fuzzysearch import find_near_matches
+from authlib.integrations.starlette_client import OAuth
+from jose import JWTError, jwt
+
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.config import Config
 
 
 class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./tech_audit.db")
-    api_key: str = Field(default="your_api_key_here")
+    api_key: str = Field(default="key")
     openai_api_key: str = Field(default="your_openai_api_key_here")
+
+    google_client_id: str = Field(default="your_google_client_id")
+    google_client_secret: str = Field(default="your_google_client_secret")
+    apple_client_id: str = Field(default="your_apple_client_id")
+    apple_client_secret: str = Field(default="your_apple_client_secret")
+    jwt_secret_key: str = Field(default="your_jwt_secret_key")
+    jwt_algorithm: str = Field(default="HS256")
 
     model_config = SettingsConfigDict(env_file=".env")
 
 
 settings = Settings()
 
-#
-client = OpenAI(api_key=settings.openai_api_key)
+
+oauth = OAuth()
+oauth.register(
+    name="google",
+    client_id=settings.google_client_id,
+    client_secret=settings.google_client_secret,
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+
+oauth.register(
+    name="apple",
+    client_id=settings.apple_client_id,
+    client_secret=settings.apple_client_secret,
+    server_metadata_url="https://appleid.apple.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "email name"},
+)
+
+auth_scheme = HTTPBearer()
+
+
+openAiClient = OpenAI(api_key=settings.openai_api_key)
 
 
 # Database setup
@@ -66,25 +191,130 @@ Base = declarative_base()
 
 
 # SQLAlchemy models
+class UserDB(Base):
+    __tablename__ = "users"
+    id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+    email = Column(String, unique=True, index=True)
+    name = Column(String)
+    oauth_provider = Column(String)  # 'google' or 'apple'
+    oauth_id = Column(String, unique=True)
+    role = Column(String)
+
+
 class AuditDB(Base):
+    """
+    Represents an audit in the system, serving as the central model for the audit process.
+
+    This class encapsulates all the core information and relationships related to an audit,
+    including the company being audited, criteria being evaluated, evidence files, questions,
+    and maturity assessments.
+
+    Attributes:
+        id (str): Unique identifier for the audit, auto-generated UUID.
+        company_id (str): Foreign key linking to the company being audited.
+        name (str): Name of the audit for quick identification.
+        description (str): Optional description of the audit's purpose or scope.
+        created_at (datetime): Timestamp of audit creation.
+        updated_at (datetime): Timestamp of last update to the audit.
+
+    Relationships:
+        company: The company being audited.
+        audit_criteria: Criteria associated with this audit.
+        evidence_files: Evidence files uploaded for this audit.
+        questions: Questions generated and answered during the audit.
+        maturity_assessments: Maturity assessments made based on audit findings.
+        custom_criteria: Custom criteria specific to this audit.
+
+    Usage:
+        This model is central to the audit process and is typically used in conjunction
+        with other models to create a comprehensive audit. It supports the multi-stage
+        audit process including initial data gathering, criteria selection, question
+        generation, evidence analysis, and maturity assessment.
+
+    Note:
+        When creating a new audit, ensure that a valid company_id is provided.
+        The created_at and updated_at fields are automatically managed by the database.
+
+    Example:
+        new_audit = AuditDB(name="Q2 2023 Tech Audit",
+                            company_id="company_uuid",
+                            description="Comprehensive tech stack evaluation")
+        db.add(new_audit)
+        db.commit()
+    """
+
     __tablename__ = "audits"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+    company_id = Column(String, ForeignKey("companies.id"))
     name = Column(String, index=True)
     description = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    company = relationship("CompanyDB", back_populates="audit", uselist=False)
+    company = relationship("CompanyDB", back_populates="audits")
+    audit_criteria = relationship("AuditCriteriaDB", back_populates="audit")
     evidence_files = relationship("EvidenceFileDB", back_populates="audit")
-    criteria = relationship("CriteriaDB", back_populates="audit")
     questions = relationship("QuestionDB", back_populates="audit")
     maturity_assessments = relationship("MaturityAssessmentDB", back_populates="audit")
 
+    # New relationship to CriteriaDB
+    custom_criteria = relationship("CriteriaDB", back_populates="specific_audit")
+
 
 class CompanyDB(Base):
+    """
+    Represents a company in the system, serving as a central model for storing and managing company information.
+
+    This class encapsulates all core information about a company, including its details, technology stack,
+    and relationships to audits. It's designed to support the comprehensive evaluation of a company's
+    technical maturity and capabilities.
+
+    Attributes:
+        id (str): Unique identifier for the company, auto-generated UUID.
+        name (str): Name of the company.
+        description (str): Optional description of the company.
+        sector (str): The industry sector the company operates in.
+        size (str): Size category of the company (e.g., "micro", "small", "medium", "large").
+        business_type (str): Type of business (e.g., "B2B", "B2C", "mixed").
+        technology_stack (str): Overview of the company's technology stack.
+        areas_of_focus (str): Comma-separated string of the company's focus areas.
+        updated_from_evidence (bool): Indicates if the company info has been updated based on evidence.
+        created_at (datetime): Timestamp of when the company record was created.
+        updated_at (datetime): Timestamp of the last update to the company record.
+        raw_evidence (Text): Raw text evidence about the company, typically from interviews or documents.
+        processed_file_ids (List[str]): List of IDs of evidence files that have been processed.
+
+    Relationships:
+        audits: All audits associated with this company.
+
+    Usage:
+        This model is used to store and retrieve information about companies being audited.
+        It supports the initial data gathering phase of the audit process and serves as a
+        reference point for all audits related to a specific company.
+
+    Note:
+        - The 'areas_of_focus' field is stored as a comma-separated string but is typically
+          handled as a list in the application layer.
+        - The 'updated_from_evidence' flag helps track whether the company information
+          has been automatically updated based on processed evidence.
+        - The 'raw_evidence' field can store large amounts of text data, useful for
+          maintaining context from interviews or document analysis.
+
+    Example:
+        new_company = CompanyDB(
+            name="TechCorp Inc.",
+            sector="Software Development",
+            size="medium",
+            business_type="B2B",
+            technology_stack="Python, React, AWS",
+            areas_of_focus="Cloud Computing,AI/ML,DevOps"
+        )
+        db.add(new_company)
+        db.commit()
+    """
+
     __tablename__ = "companies"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
-    audit_id = Column(String, ForeignKey("audits.id"), unique=True)
     name = Column(String, index=True)
     description = Column(String, nullable=True)
     sector = Column(String, nullable=True)
@@ -95,11 +325,64 @@ class CompanyDB(Base):
     updated_from_evidence = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    raw_evidence = Column(Text, nullable=True)
+    processed_file_ids = Column(MutableList.as_mutable(JSON), default=[])
 
-    audit = relationship("AuditDB", back_populates="company")
+    audits = relationship("AuditDB", back_populates="company")
 
 
 class EvidenceFileDB(Base):
+    """
+    Represents an evidence file in the audit system, storing metadata and processed content of uploaded files.
+
+    This class is crucial for managing and tracking various types of evidence files (documents, images, audio, video)
+    that are uploaded as part of the audit process. It handles the file metadata, processing status, and extracted
+    text content, supporting the evidence gathering and analysis phases of the audit.
+
+    Attributes:
+        id (str): Unique identifier for the evidence file, auto-generated UUID.
+        audit_id (str): Foreign key linking to the associated audit.
+        filename (str): Original name of the uploaded file.
+        file_type (str): MIME type or general category of the file.
+        status (str): Current status of file processing (e.g., "pending", "processing", "complete", "failed").
+        file_path (str): Path where the file is stored in the system.
+        uploaded_at (datetime): Timestamp when the file was uploaded.
+        processed_at (datetime): Timestamp when file processing was completed (or failed).
+        text_content (Text): Extracted or transcribed text content from the file.
+
+    Relationships:
+        audit: The audit this evidence file is associated with.
+
+    Usage:
+        This model is used to track and manage evidence files throughout the audit process. It supports
+        the initial data gathering phase, where various types of documents and media files are uploaded
+        as evidence. The system processes these files to extract relevant information, which is then
+        used in the audit analysis.
+
+    Note:
+        - The 'status' field should be updated as the file goes through different processing stages.
+        - 'text_content' may contain large amounts of text for document files, transcripts for audio/video,
+          or extracted text from images.
+        - File processing is typically handled asynchronously, with results updated in this model.
+
+    Example:
+        new_evidence = EvidenceFileDB(
+            audit_id="audit_uuid",
+            filename="company_structure.pdf",
+            file_type="application/pdf",
+            status="pending",
+            file_path="/path/to/evidence/files/company_structure.pdf"
+        )
+        db.add(new_evidence)
+        db.commit()
+
+        # After processing:
+        new_evidence.status = "complete"
+        new_evidence.processed_at = datetime.now(timezone.utc)
+        new_evidence.text_content = "Extracted text from PDF..."
+        db.commit()
+    """
+
     __tablename__ = "evidence_files"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     audit_id = Column(String, ForeignKey("audits.id"))
@@ -115,27 +398,235 @@ class EvidenceFileDB(Base):
 
 
 class CriteriaDB(Base):
+    """
+    Represents an audit criterion in the system, defining the standards against which companies are evaluated.
+
+    This class is central to the audit process, encapsulating the structure and content of audit criteria.
+    It supports both standard criteria applicable across audits and custom criteria specific to particular audits.
+    The hierarchical structure allows for main criteria and sub-criteria, enabling detailed and nuanced evaluations.
+
+    Attributes:
+        id (str): Unique identifier for the criterion, auto-generated UUID.
+        parent_id (str): ID of the parent criterion, if this is a sub-criterion.
+        title (str): Title or name of the criterion.
+        description (str): Detailed description of what the criterion evaluates.
+        maturity_definitions (JSON): JSON object defining maturity levels (e.g., novice, intermediate, advanced).
+        is_specific_to_audit (str): ID of the audit if this is a custom criterion, or None if it's a standard criterion.
+        section (str): The section or category this criterion belongs to (e.g., "product", "process", "platform").
+        created_at (datetime): Timestamp of when the criterion was created.
+        updated_at (datetime): Timestamp of the last update to the criterion.
+
+    Relationships:
+        parent: The parent criterion (if this is a sub-criterion).
+        children: List of sub-criteria (if this is a parent criterion).
+        audit_associations: Audits associated with this criterion.
+        evidence: Evidence linked to this criterion.
+        questions: Questions related to this criterion.
+        maturity_assessment: Maturity assessment for this criterion.
+        specific_audit: The audit this criterion is specific to (if it's a custom criterion).
+
+    Usage:
+        This model is used to define and manage the criteria used in audits. It supports the creation
+        of both standard criteria that can be reused across audits and custom criteria tailored for
+        specific audits. The hierarchical structure allows for complex, multi-level criteria definitions.
+
+    Note:
+        - The 'maturity_definitions' field should contain a structured JSON object defining different
+          maturity levels and their descriptions.
+        - When creating a sub-criterion, ensure to set the 'parent_id' to link it to its parent.
+        - Custom criteria for specific audits should have the 'is_specific_to_audit' field set.
+
+    Example:
+        # Creating a main criterion
+        main_criterion = CriteriaDB(
+            title="Data Management",
+            description="Evaluates the company's approach to managing and utilizing data",
+            maturity_definitions={
+                "novice": "Basic data storage with minimal analysis",
+                "intermediate": "Structured data management with regular analysis",
+                "advanced": "Advanced data analytics and AI-driven insights"
+            },
+            section="platform"
+        )
+        db.add(main_criterion)
+        db.commit()
+
+        # Creating a sub-criterion
+        sub_criterion = CriteriaDB(
+            parent_id=main_criterion.id,
+            title="Data Security",
+            description="Assesses the measures in place to protect sensitive data",
+            maturity_definitions={
+                "novice": "Basic access controls",
+                "intermediate": "Encryption and access logging",
+                "advanced": "Advanced threat detection and prevention"
+            },
+            section="platform"
+        )
+        db.add(sub_criterion)
+        db.commit()
+    """
+
     __tablename__ = "criteria"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
-    audit_id = Column(String, ForeignKey("audits.id"))
-    parent_id = Column(String, nullable=True)
+    parent_id = Column(String, ForeignKey("criteria.id"), nullable=True)
     title = Column(String)
     description = Column(String)
     maturity_definitions = Column(JSON)
-    selected = Column(Boolean, default=False)
-    expected_maturity_level = Column(String, nullable=True)
+    is_specific_to_audit = Column(
+        String, ForeignKey("audits.id"), nullable=True
+    )  # New column
+    section = Column(String)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    audit = relationship("AuditDB", back_populates="criteria")
+    audit_associations = relationship("AuditCriteriaDB", back_populates="criteria")
     evidence = relationship("EvidenceDB", back_populates="criteria")
     questions = relationship("QuestionDB", back_populates="criteria")
     maturity_assessment = relationship(
         "MaturityAssessmentDB", back_populates="criteria", uselist=False
     )
 
+    children = relationship(
+        "CriteriaDB",
+        backref=backref("parent", remote_side=[id]),
+        cascade="all, delete-orphan",
+    )
+
+    # New relationship to AuditDB
+    specific_audit = relationship("AuditDB", back_populates="custom_criteria")
+
+    def __repr__(self):
+        return f"<Criteria(id='{self.id}', title='{self.title}', parent_id='{self.parent_id}', is_specific_to_audit='{self.is_specific_to_audit}')>"
+
+
+class AuditCriteriaDB(Base):
+    """
+    Represents the association between an audit and a specific criterion, including the expected maturity level.
+
+    This class serves as a junction table, linking audits with their relevant criteria. It allows for customization
+    of criteria for each audit, including setting expected maturity levels. This model is crucial for tailoring
+    the audit process to each company's specific context and goals.
+
+    Attributes:
+        id (str): Unique identifier for the audit-criteria association, auto-generated UUID.
+        audit_id (str): Foreign key linking to the associated audit.
+        criteria_id (str): Foreign key linking to the associated criterion.
+        expected_maturity_level (str): The expected maturity level for this criterion in this specific audit.
+        created_at (datetime): Timestamp of when the association was created.
+        updated_at (datetime): Timestamp of the last update to the association.
+
+    Relationships:
+        audit: The audit this criterion is associated with.
+        criteria: The criterion associated with this audit.
+
+    Usage:
+        This model is used to associate specific criteria with an audit and set expected maturity levels.
+        It supports the customization of the audit process by allowing auditors to select which criteria
+        are relevant for each audit and what level of maturity is expected for each criterion.
+
+    Note:
+        - The 'expected_maturity_level' should align with the maturity levels defined in the CriteriaDB model
+          (typically 'novice', 'intermediate', or 'advanced').
+        - This model allows for the same criterion to be used in multiple audits with different expected
+          maturity levels, tailoring the assessment to each company's context.
+        - When creating a new audit, you would typically create multiple AuditCriteriaDB instances to
+          associate all relevant criteria with the audit.
+
+    Example:
+        # Assuming we have an audit and a criterion
+        audit_id = "existing_audit_uuid"
+        criteria_id = "existing_criteria_uuid"
+
+        audit_criteria = AuditCriteriaDB(
+            audit_id=audit_id,
+            criteria_id=criteria_id,
+            expected_maturity_level="intermediate"
+        )
+        db.add(audit_criteria)
+        db.commit()
+
+        # Later, updating the expected maturity level
+        audit_criteria.expected_maturity_level = "advanced"
+        db.commit()
+    """
+
+    __tablename__ = "audit_criteria"
+    id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+    audit_id = Column(String, ForeignKey("audits.id"))
+    criteria_id = Column(String, ForeignKey("criteria.id"))
+    expected_maturity_level = Column(String, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    audit = relationship("AuditDB", back_populates="audit_criteria")
+    criteria = relationship("CriteriaDB", back_populates="audit_associations")
+
 
 class EvidenceDB(Base):
+    """
+    Represents a piece of evidence collected during the audit process, linked to specific criteria and audits.
+
+    This class is crucial for storing and managing the various pieces of evidence gathered throughout
+    the audit. It supports different types of evidence (e.g., quotes, summaries) from various sources,
+    allowing for a comprehensive and structured approach to evidence collection and analysis.
+
+    Attributes:
+        id (str): Unique identifier for the evidence, auto-generated UUID.
+        audit_id (str): Foreign key linking to the associated audit.
+        criteria_id (str): Foreign key linking to the associated criterion.
+        content (Text): The actual content of the evidence (e.g., a quote, summary, or observation).
+        source (str): The source of the evidence (e.g., "interview", "document", "system_log").
+        source_id (str): Identifier for the specific source (e.g., file ID, interview ID).
+        evidence_type (str): Type of evidence (e.g., "quote", "summary", "observation").
+        start_position (Integer): For quoted evidence, the starting position in the source text.
+        created_at (datetime): Timestamp of when the evidence was recorded.
+
+    Relationships:
+        criteria: The criterion this evidence is associated with.
+
+    Usage:
+        This model is used to store and retrieve evidence collected during the audit process.
+        It supports the evidence gathering and analysis phases, allowing auditors to link
+        specific pieces of evidence to relevant criteria and track their sources.
+
+    Note:
+        - The 'content' field may contain substantial text, especially for summaries or long quotes.
+        - 'evidence_type' helps categorize different forms of evidence, which can be useful for
+          analysis and reporting.
+        - 'start_position' is particularly useful for quotes, allowing traceability back to the
+          original source document.
+        - When adding evidence, ensure it's linked to both the correct audit and criterion.
+
+    Example:
+        # Adding a quote as evidence
+        new_evidence = EvidenceDB(
+            audit_id="audit_uuid",
+            criteria_id="criteria_uuid",
+            content="The company uses a microservices architecture with 20 separate services.",
+            source="interview",
+            source_id="interview_123",
+            evidence_type="quote",
+            start_position=1542
+        )
+        db.add(new_evidence)
+        db.commit()
+
+        # Adding a summary as evidence
+        summary_evidence = EvidenceDB(
+            audit_id="audit_uuid",
+            criteria_id="criteria_uuid",
+            content="The development team follows Agile methodologies, with two-week sprints and daily stand-ups.",
+            source="document",
+            source_id="process_doc_456",
+            evidence_type="summary"
+        )
+        db.add(summary_evidence)
+        db.commit()
+    """
+
     __tablename__ = "evidence"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     audit_id = Column(String, ForeignKey("audits.id"))
@@ -143,12 +634,67 @@ class EvidenceDB(Base):
     content = Column(Text)
     source = Column(String)
     source_id = Column(String)
+    evidence_type = Column(String, nullable=False, default="quote")
+    start_position = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     criteria = relationship("CriteriaDB", back_populates="evidence")
 
 
 class QuestionDB(Base):
+    """
+    Represents a question generated during the audit process, linked to specific criteria and audits.
+
+    This class is central to the interactive audit process, storing questions generated based on
+    criteria and evidence gaps. It supports the iterative nature of the audit, allowing for
+    dynamic question generation and answer collection to gather comprehensive information.
+
+    Attributes:
+        id (str): Unique identifier for the question, auto-generated UUID.
+        audit_id (str): Foreign key linking to the associated audit.
+        criteria_id (str): Foreign key linking to the associated criterion.
+        text (Text): The actual text of the question.
+        created_at (datetime): Timestamp of when the question was created.
+
+    Relationships:
+        audit: The audit this question is associated with.
+        criteria: The criterion this question is related to.
+        answers: List of answers provided for this question.
+
+    Usage:
+        This model is used to store and manage questions generated during the audit process.
+        It supports the dynamic and iterative nature of information gathering, allowing the
+        system to generate follow-up questions based on previous answers and evidence gaps.
+
+    Note:
+        - Questions are typically generated automatically by the system based on criteria
+          and existing evidence, but can also be manually added by auditors.
+        - The 'text' field may contain complex or multi-part questions.
+        - Questions are linked to both an audit and a specific criterion, allowing for
+          targeted information gathering.
+        - The relationship with answers allows for tracking responses and potentially
+          generating follow-up questions.
+
+    Example:
+        # Generating a question for a specific audit and criterion
+        new_question = QuestionDB(
+            audit_id="audit_uuid",
+            criteria_id="criteria_uuid",
+            text="What kind of datastore approach do you have for your main application data?"
+        )
+        db.add(new_question)
+        db.commit()
+
+        # Generating a follow-up question based on an answer
+        follow_up_question = QuestionDB(
+            audit_id="audit_uuid",
+            criteria_id="criteria_uuid",
+            text="You mentioned using MongoDB. How is your MongoDB cluster set up for scalability and redundancy?"
+        )
+        db.add(follow_up_question)
+        db.commit()
+    """
+
     __tablename__ = "questions"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     audit_id = Column(String, ForeignKey("audits.id"))
@@ -162,6 +708,62 @@ class QuestionDB(Base):
 
 
 class AnswerDB(Base):
+    """
+    Represents an answer to a specific question in the audit process.
+
+    This class is crucial for storing and managing the responses provided by the audited company
+    to the questions generated during the audit. It forms a key part of the evidence gathering
+    process, providing detailed insights into the company's practices and maturity levels.
+
+    Attributes:
+        id (str): Unique identifier for the answer, auto-generated UUID.
+        question_id (str): Foreign key linking to the associated question.
+        text (Text): The actual content of the answer.
+        submitted_by (str): Identifier or name of the person who provided the answer.
+        created_at (datetime): Timestamp of when the answer was submitted.
+
+    Relationships:
+        question: The question this answer is associated with.
+
+    Usage:
+        This model is used to store and retrieve answers provided by the audited company.
+        It supports the interactive nature of the audit process, allowing for the collection
+        and analysis of detailed responses to specific questions about the company's practices,
+        technologies, and processes.
+
+    Note:
+        - The 'text' field may contain lengthy and detailed responses, potentially including
+          technical details or explanations of company practices.
+        - The 'submitted_by' field helps in tracking the source of information within the
+          audited company, which can be useful for follow-up or clarification.
+        - Answers are linked to specific questions, which in turn are linked to criteria,
+          allowing for structured analysis of the gathered information.
+        - The system may use these answers to generate follow-up questions or as evidence
+          for assessing maturity levels.
+
+    Example:
+        # Recording an answer to a specific question
+        new_answer = AnswerDB(
+            question_id="question_uuid",
+            text="We use a MongoDB cluster with three replica sets for our main application data. "
+                 "The cluster is hosted on AWS and configured for automatic failover and scaling.",
+            submitted_by="John Doe, Lead DevOps Engineer"
+        )
+        db.add(new_answer)
+        db.commit()
+
+        # Recording a follow-up answer
+        follow_up_answer = AnswerDB(
+            question_id="follow_up_question_uuid",
+            text="Our MongoDB cluster is set up with three shards, each having a primary and two "
+                 "secondary nodes. We use MongoDB Atlas for managed hosting, which provides "
+                 "automated backups, monitoring, and horizontal scaling capabilities.",
+            submitted_by="Jane Smith, Database Administrator"
+        )
+        db.add(follow_up_answer)
+        db.commit()
+    """
+
     __tablename__ = "answers"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     question_id = Column(String, ForeignKey("questions.id"))
@@ -173,6 +775,64 @@ class AnswerDB(Base):
 
 
 class MaturityAssessmentDB(Base):
+    """
+    Represents a maturity assessment for a specific criterion within an audit.
+
+    This class is crucial for capturing the final evaluation of a company's maturity level
+    for each criterion assessed during the audit. It encapsulates the auditor's judgment
+    based on the evidence collected, questions answered, and the overall context of the company.
+
+    Attributes:
+        id (str): Unique identifier for the maturity assessment, auto-generated UUID.
+        audit_id (str): Foreign key linking to the associated audit.
+        criteria_id (str): Foreign key linking to the associated criterion.
+        maturity_level (str): The assessed maturity level (e.g., "novice", "intermediate", "advanced").
+        comments (Text): Additional comments or justification for the assessment.
+        assessed_by (str): Identifier or name of the auditor who made the assessment.
+        assessed_at (datetime): Timestamp of when the assessment was made.
+
+    Relationships:
+        audit: The audit this maturity assessment is part of.
+        criteria: The specific criterion being assessed.
+
+    Usage:
+        This model is used to record the final maturity assessments for each criterion in an audit.
+        It represents the culmination of the evidence gathering and analysis process, where an
+        auditor determines the company's maturity level based on all available information.
+
+    Note:
+        - The 'maturity_level' should align with the levels defined in the criteria (typically
+          "novice", "intermediate", "advanced", but could be customized).
+        - The 'comments' field is crucial for providing context and justification for the
+          assessment, especially in cases where the determination might not be straightforward.
+        - Each criterion in an audit should have one maturity assessment.
+        - The assessment can be updated if new evidence comes to light or if a reassessment
+          is needed.
+
+    Example:
+        # Recording a maturity assessment for a specific criterion in an audit
+        new_assessment = MaturityAssessmentDB(
+            audit_id="audit_uuid",
+            criteria_id="criteria_uuid",
+            maturity_level="intermediate",
+            comments="The company demonstrates a structured approach to data management with regular "
+                     "analysis, but lacks advanced analytics capabilities. They have implemented basic "
+                     "data governance policies and use cloud-based data storage solutions effectively.",
+            assessed_by="Alice Johnson, Lead Auditor"
+        )
+        db.add(new_assessment)
+        db.commit()
+
+        # Updating an existing assessment based on new information
+        existing_assessment = db.query(MaturityAssessmentDB).filter_by(id="assessment_uuid").first()
+        existing_assessment.maturity_level = "advanced"
+        existing_assessment.comments += "\n\nUpdate: After reviewing additional evidence of their "
+                                        "machine learning initiatives and data-driven decision making "
+                                        "processes, the maturity level has been upgraded to advanced."
+        existing_assessment.assessed_at = datetime.now(timezone.utc)
+        db.commit()
+    """
+
     __tablename__ = "maturity_assessments"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     audit_id = Column(String, ForeignKey("audits.id"))
@@ -187,15 +847,19 @@ class MaturityAssessmentDB(Base):
 
 
 # Pydantic models
-class AuditCreate(BaseModel):
-    name: str
-    description: str = Field(default=None)
+class MaturityLevel(str, Enum):
+    novice = "novice"
+    intermediate = "intermediate"
+    advanced = "advanced"
 
 
 class AuditResponse(BaseModel):
     id: str
     name: str
     description: str = Field(default=None)
+    company_id: str
+    created_at: datetime
+    updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -213,31 +877,28 @@ class EvidenceFileResponse(BaseModel):
 class CriteriaCreate(BaseModel):
     title: str
     description: str
-    parent_id: Optional[str] = Field(default=None)
-    maturity_definitions: dict
-
-
-class CriteriaResponse(CriteriaCreate):
-    id: str
-    audit_id: str
-
-    model_config = ConfigDict(from_attributes=True)
+    parent_id: Optional[str] = None
+    maturity_definitions: Dict[MaturityLevel, str]
+    section: str
+    expected_maturity_level: MaturityLevel
 
 
 class CompanySize(str, Enum):
+    unknown = "unknown"
+    micro = "micro"
     small = "small"
     medium = "medium"
     large = "large"
 
 
 class CompanyCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    sector: Optional[str] = Field(None, max_length=50)
+    name: str = Field(..., min_length=1)
+    description: Optional[str] = Field(None)
+    sector: Optional[str] = Field(None)
     size: Optional[CompanySize] = None
-    business_type: Optional[str] = Field(None, max_length=50)
-    technology_stack: Optional[str] = Field(None, max_length=200)
-    areas_of_focus: Optional[List[str]] = Field(None, max_length=10)
+    business_type: Optional[str] = Field(None)
+    technology_stack: Optional[str] = Field(None)
+    areas_of_focus: Optional[List[str]] = Field(None)
 
     @field_validator("size")
     def validate_size(cls, v):
@@ -250,19 +911,18 @@ class CompanyCreate(BaseModel):
                 )
         return v
 
-    @field_validator("areas_of_focus")
-    def check_areas_of_focus(cls, v):
-        if v:
-            if len(v) > 10:
-                raise ValueError("Maximum of 10 areas of focus allowed")
-            if any(len(area) > 50 for area in v):
-                raise ValueError("Each area of focus must be 50 characters or less")
-        return v
+
+class AuditCreate(BaseModel):
+    name: str
+    description: str = Field(default=None)
+    company_id: Optional[str] = Field(default=None)
+    company_name: Optional[str] = Field(default=None)
 
 
 class CompanyResponse(CompanyCreate):
     id: str
-    audit_id: str
+    created_at: datetime
+    updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -274,16 +934,41 @@ class CompanyResponse(CompanyCreate):
         return v
 
 
+class CompanyListResponse(BaseModel):
+    id: str
+    name: str
+    sector: Optional[str]
+    description: Optional[str] = Field(None)
+    size: Optional[str]
+    business_type: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CriteriaSelect(BaseModel):
-    criteria_ids: List[str]
-    expected_maturity_levels: dict
+    criteria_id: str
+    expected_maturity_level: Optional[MaturityLevel] = None
 
 
 class CriteriaSelectionResponse(BaseModel):
     id: str
+    audit_id: str
+    criteria_id: str
+    expected_maturity_level: Optional[MaturityLevel]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CriteriaResponse(BaseModel):
+    id: str
     title: str
-    selected: bool
-    expected_maturity_level: Optional[str]
+    description: str
+    parent_id: str | None
+    maturity_definitions: dict
+    section: str
+    is_specific_to_audit: str | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -294,10 +979,40 @@ class EvidenceCreate(BaseModel):
     source_id: str
 
 
-class EvidenceResponse(EvidenceCreate):
+class EvidenceResponse(BaseModel):
     id: str
     audit_id: str
     criteria_id: str
+    content: str
+    source: str
+    source_id: str
+    evidence_type: str
+    start_position: Optional[int] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AnswerCreate(BaseModel):
+    text: str
+    submitted_by: str
+
+
+class AnswerResponse(BaseModel):
+    id: str
+    text: str
+    submitted_by: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AuditListResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -306,59 +1021,25 @@ class QuestionCreate(BaseModel):
     text: str
 
 
-class QuestionResponse(QuestionCreate):
-    id: str
-    audit_id: str
-    criteria_id: str
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
 class QuestionResponse(BaseModel):
     id: str
-    audit_id: str
-    criteria_id: str
     text: str
     created_at: datetime
-    answered: bool = Field(default=False)
-
-    model_config = ConfigDict(from_attributes=True)
-
-    @classmethod
-    def from_orm(cls, obj):
-        # Create a dictionary representation of the object
-        dict_obj = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
-        # Add the 'answered' field based on whether answers exist
-        dict_obj["answered"] = bool(obj.answers)
-        return cls(**dict_obj)
-
-
-class AnswerCreate(BaseModel):
-    text: str
-    submitted_by: str
-
-
-class AnswerResponse(AnswerCreate):
-    id: str
-    question_id: str
-    created_at: datetime
+    answers: List[AnswerResponse]
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class MaturityLevel(str, Enum):
-    novice = "novice"
-    intermediate = "intermediate"
-    advanced = "advanced"
+class CriteriaEvidenceResponse(BaseModel):
+    evidence: List[EvidenceResponse]
+    questions: List[QuestionResponse]
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MaturityAssessmentCreate(BaseModel):
     maturity_level: MaturityLevel
     comments: Optional[str] = Field(default=None)
-
-
-from datetime import datetime
 
 
 class MaturityAssessmentResponse(MaturityAssessmentCreate):
@@ -370,9 +1051,31 @@ class MaturityAssessmentResponse(MaturityAssessmentCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
-class CriteriaSelect(BaseModel):
-    criteria_ids: List[str]
-    expected_maturity_levels: Dict[str, str]
+class RemoveCriteriaRequest(BaseModel):
+    criteria_id: str
+
+
+class RemoveCriteriaResponse(BaseModel):
+    message: str
+    audit_id: str
+    criteria_id: str
+
+
+class DeleteCustomCriteriaResponse(BaseModel):
+    message: str
+    criteria_id: str
+
+
+class UpdateCustomCriteriaRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    parent_id: Optional[str] = None
+    maturity_definitions: Optional[Dict[str, str]] = None
+    section: Optional[str] = None
+
+
+class GoogleAuthRequest(BaseModel):
+    token: str
 
 
 # Create tables
@@ -389,43 +1092,77 @@ def get_db():
 
 
 # Authentication
-API_KEY_NAME = "X-API-Key"
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+# API_KEY_NAME = "X-API-Key"
+# api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 
-async def get_api_key(api_key_header: str = Depends(api_key_header)):
-    if api_key_header == settings.api_key:
-        return api_key_header
-    raise HTTPException(status_code=403, detail="Could not validate credentials")
+# async def get_api_key(api_key_header: str = Depends(api_key_header)):
+#     if api_key_header == settings.api_key:
+#         return api_key_header
+#     raise HTTPException(status_code=403, detail="Could not validate credentials")
+async def get_current_user(
+    auth: HTTPAuthorizationCredentials = Depends(auth_scheme),
+    db: Session = Depends(get_db),
+):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        token = auth.credentials
+        payload = verify_jwt_token(token)
+        if payload is None:
+            raise credentials_exception
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    user = db.query(UserDB).filter(UserDB.id == user_id).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+
+def create_jwt_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    return jwt.encode(
+        to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
+    )
+
+
+def verify_jwt_token(token: str):
+    try:
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        return payload
+    except JWTError:
+        return None
 
 
 # FastAPI app
 app = FastAPI()
 
+# Add CORS middleware
+origins = [
+    "http://localhost:3000",  # React app
+    "http://127.0.0.1:3000",  # Alternate localhost
+    # Add other origins if necessary
+]
 
-def read_criteria_from_json():
-    json_path = os.path.join(os.path.dirname(__file__), "criteria.json")
-    with open(json_path, "r") as f:
-        return json.load(f)
+app.add_middleware(SessionMiddleware, secret_key=secrets.token_urlsafe(32))
 
-
-def create_criteria_from_json(db: Session, audit_id: int):
-    criteria_data = read_criteria_from_json()
-    for section in criteria_data:
-        for criteria in section["criteria"]:
-            db_criteria = CriteriaDB(
-                audit_id=audit_id,
-                title=criteria["title"],
-                description=criteria.get("description", ""),
-                parent_id=criteria.get("parent"),
-                maturity_definitions={
-                    "novice": criteria.get("novice", ""),
-                    "intermediate": criteria.get("intermediate", ""),
-                    "advanced": criteria.get("advanced", ""),
-                },
-            )
-            db.add(db_criteria)
-    db.commit()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],  # Or specify the methods you want to allow
+    allow_headers=["*"],  # Or specify the headers you want to allow
+)
 
 
 # Helper functions
@@ -446,8 +1183,13 @@ def process_file(file_path: str, db: Session, file_id: str):
             audio_path = extract_audio(file_path)
             text_content = transcribe_audio(audio_path)
             os.remove(audio_path)
+        elif file_extension in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]:
+            text_content = analyze_image(file_path)
         else:
             text_content = convert_with_pandoc(file_path)
+
+        if text_content is None:
+            raise Exception("Transcription, analysis, or conversion failed")
 
         db_file.text_content = text_content
         db_file.status = "complete"
@@ -468,8 +1210,84 @@ def extract_audio(video_path: str) -> str:
     return output_path
 
 
-def transcribe_audio(audio_path: str) -> str:
+def analyze_image(image_path: str) -> Optional[str]:
+    max_retries = 3
+    retry_delay = 5  # seconds
 
+    # Function to encode the image
+    def encode_image(image_path):
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode("utf-8")
+
+    # Encoding the image
+    base64_image = encode_image(image_path)
+
+    # Defining the function for GPT to use
+    functions = [
+        {
+            "name": "describe_image",
+            "description": "Describes the content of an image relevant to a technical and product audit",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "A detailed description of the image content, or 'irrelevant' if the image is not relevant to the audit",
+                    }
+                },
+                "required": ["description"],
+            },
+        }
+    ]
+
+    for attempt in range(max_retries):
+        try:
+            response = openAiClient.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert technical and product auditor. You reply in british english. Your task is to analyse images for a technical and product audit process.",
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Analyze this image for our technical and product audit. If it's irrelevant (like a logo or unrelated picture), respond with 'irrelevant'. Otherwise, provide a detailed description of the content, especially if it's a system screenshot, architecture diagram, process chart, or documentation. Focus on factual information without assessing maturity.",
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                },
+                            },
+                        ],
+                    },
+                ],
+                functions=functions,
+                function_call={"name": "describe_image"},
+            )
+
+            # Extract the function call result
+            function_call = response.choices[0].message.function_call
+            if function_call and function_call.name == "describe_image":
+                description = eval(function_call.arguments)["description"]
+                return description if description != "irrelevant" else None
+
+        except Exception as e:
+            print(f"Error analyzing image, attempt {attempt + 1}: {str(e)}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print(f"Failed to analyze image after {max_retries} attempts.")
+                return None
+
+    return None
+
+
+def transcribe_audio(audio_path: str) -> Optional[str]:
     # Load audio file using pydub
     audio = AudioSegment.from_file(audio_path)
 
@@ -477,7 +1295,9 @@ def transcribe_audio(audio_path: str) -> str:
     max_chunk_duration_ms = 15 * 60 * 1000  # 15 minutes in milliseconds
     num_chunks = math.ceil(len(audio) / max_chunk_duration_ms)
 
-    transcripts = []
+    transcripts: List[Optional[str]] = [None] * num_chunks
+    max_retries = 3
+    retry_delay = 5  # seconds
 
     for i in range(num_chunks):
         start_ms = i * max_chunk_duration_ms
@@ -491,38 +1311,82 @@ def transcribe_audio(audio_path: str) -> str:
             chunk.export(temp_audio_file.name, format="mp3")
             temp_audio_file.close()
 
-            # Transcribe the chunk
-            with open(temp_audio_file.name, "rb") as audio_file:
+            # Transcribe the chunk with retry logic
+            for attempt in range(max_retries):
                 try:
-                    transcript = client.audio.transcriptions.create(
-                        model="whisper-1", file=audio_file
-                    )
-                    transcripts.append(transcript.text)
+                    with open(temp_audio_file.name, "rb") as audio_file:
+                        transcript = openAiClient.audio.transcriptions.create(
+                            model="whisper-1", file=audio_file
+                        )
+                    transcripts[i] = transcript.text
+                    break
                 except Exception as e:
-                    print(f"Error transcribing chunk {i + 1}: {str(e)}")
+                    print(
+                        f"Error transcribing chunk {i + 1}, attempt {attempt + 1}: {str(e)}"
+                    )
+                    if attempt < max_retries - 1:
+                        print(f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                    else:
+                        print(
+                            f"Failed to transcribe chunk {i + 1} after {max_retries} attempts."
+                        )
 
             # Delete the temporary file
             os.unlink(temp_audio_file.name)
 
+    # Check if all chunks were transcribed successfully
+    if None in transcripts:
+        print("Transcription failed: Some chunks could not be transcribed.")
+        return None
+
     # Combine all transcripts
     combined_transcript = "\n".join(transcripts)
-
-    # Post-process the combined transcript with GPT-4
-    # corrected_transcript = post_process_transcript(combined_transcript)
 
     return combined_transcript
 
 
 def convert_with_pandoc(file_path: str) -> str:
-    output_path = file_path + ".txt"
-    try:
-        subprocess.run(["pandoc", "-o", output_path, file_path], check=True)
-        with open(output_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        os.remove(output_path)  # Clean up temporary text file
-        return content
-    except subprocess.CalledProcessError:
-        raise Exception(f"Pandoc conversion failed for file: {file_path}")
+    # Create a temporary directory to store extracted images
+    with tempfile.TemporaryDirectory() as temp_dir:
+        try:
+            # Convert document to HTML, extracting images
+            html_content = pypandoc.convert_file(
+                file_path, to="html", extra_args=["--extract-media=" + temp_dir]
+            )
+
+            # Process and replace image references
+            processed_content = process_images(html_content, temp_dir)
+
+            # Convert processed HTML back to Markdown
+            markdown_content = pypandoc.convert_text(
+                processed_content, to="markdown", format="html"
+            )
+
+            return markdown_content
+
+        except Exception as e:
+            raise Exception(
+                f"Pandoc conversion failed for file: {file_path}. Error: {str(e)}"
+            )
+
+
+def process_images(content: str, image_dir: str) -> str:
+    soup = BeautifulSoup(content, "html.parser")
+
+    for img in soup.find_all("img"):
+        src = img.get("src")
+        if src and not src.startswith("http"):
+            full_image_path = os.path.join(image_dir, src)
+
+            if os.path.exists(full_image_path):
+                image_description = analyze_image(full_image_path)
+                if image_description:
+                    description_p = soup.new_tag("p")
+                    description_p.string = f"Image Description: {image_description}"
+                    img.insert_after(description_p)
+
+    return str(soup)
 
 
 def save_text_content(db_file: EvidenceFileDB, content: str):
@@ -531,55 +1395,158 @@ def save_text_content(db_file: EvidenceFileDB, content: str):
     db_file.text_content = content
 
 
-def simulate_evidence_extraction(db: Session, audit_id: str, criteria_id: str):
-    # Simulate processing delay
-    import time
-
-    # time.sleep(5)
-
-    # Get all evidence files for the audit
-    evidence_files = (
-        db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id).all()
-    )
-
-    # Simulate extracting evidence from each file
-    for file in evidence_files:
-        # Generate some random "extracted" content
-        extracted_content = f"Simulated evidence extracted from {file.filename}"
-
-        # Create a new evidence entry
-        new_evidence = EvidenceDB(
-            audit_id=audit_id,
-            criteria_id=criteria_id,
-            content=extracted_content,
-            source="evidence_file",
-            source_id=file.id,
-        )
-        db.add(new_evidence)
-
-    # Commit the changes
-    db.commit()
-
-
 # Endpoints
+@app.get("/login/google")
+async def login_google(request: Request):
+    redirect_uri = request.url_for("auth_google")
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+
+@app.get("/auth/google")
+async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
+    try:
+        token = await oauth.google.authorize_access_token(request)
+        print("Received token:", json.dumps(token, indent=2))  # Debug print
+
+        if "id_token" not in token:
+            raise ValueError("No id_token found in the OAuth response")
+
+        # Use google-auth library to verify the token
+        idinfo = id_token.verify_oauth2_token(
+            token["id_token"], google_auth_requests.Request(), settings.google_client_id
+        )
+
+        print("Decoded token info:", json.dumps(idinfo, indent=2))  # Debug print
+
+        # Get or create user
+        user = (
+            db.query(UserDB)
+            .filter(UserDB.oauth_id == idinfo["sub"], UserDB.oauth_provider == "google")
+            .first()
+        )
+
+        if not user:
+            user = UserDB(
+                email=idinfo["email"],
+                name=idinfo.get("name", "Google User"),
+                oauth_provider="google",
+                oauth_id=idinfo["sub"],
+                role="user",
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+        # Create JWT token
+        access_token = create_jwt_token({"sub": user.id})
+
+        return {"access_token": access_token, "token_type": "bearer"}
+
+    except Exception as e:
+        print(f"Error in auth_google_callback: {str(e)}")
+        error_details = {
+            "error": str(e),
+            "token_info": token if "token" in locals() else "Token not received",
+        }
+        return JSONResponse(
+            status_code=500,
+            content={"message": "Authentication failed", "details": error_details},
+        )
+
+
+@app.post("/auth/google")
+async def auth_google(auth_request: GoogleAuthRequest, db: Session = Depends(get_db)):
+    try:
+        token = auth_request.token
+
+        idinfo = id_token.verify_oauth2_token(
+            token, google_auth_requests.Request(), settings.google_client_id
+        )
+
+        if idinfo["iss"] not in ["accounts.google.com", "https://accounts.google.com"]:
+            raise ValueError("Wrong issuer.")
+
+        # Get or create user
+        user = (
+            db.query(UserDB)
+            .filter(UserDB.oauth_id == idinfo["sub"], UserDB.oauth_provider == "google")
+            .first()
+        )
+
+        if not user:
+            user = UserDB(
+                email=idinfo["email"],
+                name=idinfo["name"],
+                oauth_provider="google",
+                oauth_id=idinfo["sub"],
+                role="user",
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+        # Create JWT token
+        access_token = create_jwt_token({"sub": user.id})
+        return {"access_token": access_token, "token_type": "bearer"}
+
+    except ValueError as e:
+        print(f"Error in auth_google: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in auth_google: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/verify-token")
+async def verify_token(current_user: UserDB = Depends(get_current_user)):
+    return {
+        "user": {
+            "id": current_user.id,
+            "email": current_user.email,
+            "name": current_user.name,
+            "role": current_user.role,
+        }
+    }
 
 
 @app.post("/audits", response_model=AuditResponse)
-def create_audit(audit: AuditCreate, db: Session = Depends(get_db)):
-    db_audit = AuditDB(**audit.model_dump())
+def create_audit(
+    audit: AuditCreate,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    if audit.company_id:
+        # Use existing company
+        company = db.query(CompanyDB).filter(CompanyDB.id == audit.company_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+    elif audit.company_name:
+        # Create new company
+        company = CompanyDB()
+        company.name = audit.company_name
+        db.add(company)
+        db.flush()  # This assigns an ID to the company without committing the transaction
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either company_id or company details must be provided",
+        )
+
+    db_audit = AuditDB(
+        name=audit.name, description=audit.description, company_id=company.id
+    )
     db.add(db_audit)
     db.commit()
     db.refresh(db_audit)
-
-    # Automatically import criteria after creating the audit
-    create_criteria_from_json(db, db_audit.id)
 
     return db_audit
 
 
 @app.get("/audits/{audit_id}", response_model=AuditResponse)
 async def get_audit(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
     db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
     if db_audit is None:
@@ -589,7 +1556,9 @@ async def get_audit(
 
 @app.delete("/audits/{audit_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_audit(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
     db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
     if db_audit is None:
@@ -613,7 +1582,7 @@ async def list_audits(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     audits = db.query(AuditDB).offset(skip).limit(limit).all()
     return audits
@@ -624,7 +1593,7 @@ async def create_company(
     audit_id: str,
     company: CompanyCreate,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
     if db_audit is None:
@@ -647,14 +1616,70 @@ async def create_company(
     return CompanyResponse(**response_data)
 
 
+@app.get("/companies", response_model=List[CompanyListResponse])
+async def list_audits(
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    companies = db.query(CompanyDB).offset(skip).limit(limit).all()
+    return companies
+
+
+@app.get("/companies/{company_id}", response_model=CompanyResponse)
+async def get_company_detail(
+    company_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    company = db.query(CompanyDB).filter(CompanyDB.id == company_id).first()
+    if company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return company
+
+
 @app.get("/audits/{audit_id}/company", response_model=CompanyResponse)
 async def get_company(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    db_company = db.query(CompanyDB).filter(CompanyDB.audit_id == audit_id).first()
+    db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
+    if db_audit is None:
+        raise HTTPException(status_code=404, detail="Audit not found")
+
+    db_company = db_audit.company
     if db_company is None:
-        raise HTTPException(status_code=404, detail="Company not found")
+        raise HTTPException(status_code=404, detail="Company not found for this audit")
+
     return db_company
+
+
+@app.get("/companies/{company_id}/audits", response_model=List[AuditListResponse])
+async def list_company_audits(
+    company_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+):
+    # First, check if the company exists
+    company = db.query(CompanyDB).filter(CompanyDB.id == company_id).first()
+    if company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    # Query audits associated with the company
+    audits = (
+        db.query(AuditDB)
+        .filter(AuditDB.company_id == company_id)
+        .order_by(AuditDB.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+    return audits
 
 
 @app.put("/audits/{audit_id}/company", response_model=CompanyResponse)
@@ -662,11 +1687,15 @@ async def update_company(
     audit_id: str,
     company: CompanyCreate,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    db_company = db.query(CompanyDB).filter(CompanyDB.audit_id == audit_id).first()
+    db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
+    if db_audit is None:
+        raise HTTPException(status_code=404, detail="Audit not found")
+
+    db_company = db_audit.company
     if db_company is None:
-        raise HTTPException(status_code=404, detail="Company not found")
+        raise HTTPException(status_code=404, detail="Company not found for this audit")
 
     company_data = company.model_dump(exclude_unset=True)
     if "areas_of_focus" in company_data:
@@ -684,89 +1713,171 @@ async def update_company(
     "/audits/{audit_id}/company/actions/parse-evidence", response_model=CompanyResponse
 )
 async def parse_evidence_for_company(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    import json
+    # Set up logging
+    logging.basicConfig(level=logging.DEBUG)
+    logger = logging.getLogger(__name__)
 
     # Get the audit
     db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
     if db_audit is None:
         raise HTTPException(status_code=404, detail="Audit not found")
 
-    # Get all processed evidence files with text content
+    # Get the company associated with the audit
+    db_company = db_audit.company
+    if db_company is None:
+        raise HTTPException(status_code=404, detail="Company not found for this audit")
+
+    # Get all processed evidence files that haven't been parsed yet
+    processed_file_ids = db_company.processed_file_ids or []
+    logger.debug(f"Initial processed_file_ids: {processed_file_ids}")
+
     evidence_files = (
         db.query(EvidenceFileDB)
         .filter(
             EvidenceFileDB.audit_id == audit_id,
             EvidenceFileDB.status == "complete",
             EvidenceFileDB.text_content != None,
+            ~EvidenceFileDB.id.in_(processed_file_ids if processed_file_ids else []),
         )
         .all()
     )
 
-    if not evidence_files:
-        raise HTTPException(status_code=404, detail="No processed evidence files found")
+    logger.debug(f"Number of evidence files to process: {len(evidence_files)}")
 
-    # Combine text contents
-    texts = [file.text_content for file in evidence_files]
-    combined_text = "\n".join(texts)
+    if not evidence_files:
+        logger.debug("No new files to parse, proceeding to stage 2")
+        return process_raw_evidence(db_company, db)
+
+    # Stage 1: Parse each new evidence file
+    new_processed_file_ids = processed_file_ids.copy() if processed_file_ids else []
+    for file in evidence_files:
+        if file.text_content:  # Ensure there's content to parse
+            parsed_content = parse_single_evidence_file(file, db_company)
+            parsed_content = (
+                "=== This is information gathered from the file "
+                + file.filename
+                + " ==="
+                + parsed_content
+            )
+            if db_company.raw_evidence:
+                db_company.raw_evidence += "\n\n" + parsed_content
+            else:
+                db_company.raw_evidence = parsed_content
+            new_processed_file_ids.append(file.id)
+            logger.debug(f"Processed file ID appended: {file.id}")
+
+    # Update the processed_file_ids
+    db_company.processed_file_ids = new_processed_file_ids
+    logger.debug(f"Updated processed_file_ids: {db_company.processed_file_ids}")
+
+    db.commit()
+    logger.debug("Changes committed to database")
+
+    # Stage 2: Process the accumulated raw evidence
+    return process_raw_evidence(db_company, db)
+
+
+def parse_single_evidence_file(file: EvidenceFileDB, db_company: CompanyDB) -> str:
+
+    if file.text_content is None or file.text_content == "":
+        print(f"Error parsing file {file.id} - no text contents")
+        return ""
+
+    system_prompt = (
+        "Within the following content find company information based on the following areas. If unable to determine high quality and accurate response from text then don't include that area of information in your response."
+        + "A description of the company. Approx 200 words which would enable someone with no knowledge of the company to understand the company and what they do / are known for. It should focus on what the companies product / offering is rather than its technology or implementation unless that is core to it's offering."
+        + "The sector the company operates in. i.e. consumer electronics, financial markets..."
+        + "The size of the company (unknown, micro, small, medium, large). Roughly aligned with; Micro-enterprise: A business with up to 10 employees < £1.5 million revenue, Small enterprise: A business with 10 to 49 employees < £15 million revenue, Medium-sized enterprise: A business with 50 to 249 employees < £54 million revenue, Large enterprise: A business with 250 or more employees "
+        + "The type of business the company is. Is it a b2b, b2c maybe a mix of multiple"
+        + "The main technologies used by the company and it's platforms."
+        + "Areas of focus of the company. The markets it focuses on i.e education, consumer, finance, entertainment and the types of business it does i.e. product manufacture, software development..."
+        + "The company is called "
+        + db_company.name
+        + " and the file your extracting data from is a "
+        + file.file_type
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": file.text_content},
+    ]
+
+    try:
+        response = openAiClient.chat.completions.create(
+            model="gpt-4o-mini", messages=messages, max_tokens=500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Error parsing file {file.id}: {str(e)}")
+        return ""
+
+
+def process_raw_evidence(db_company: CompanyDB, db: Session) -> CompanyResponse:
+    if not db_company.raw_evidence:
+        raise HTTPException(status_code=400, detail="No raw evidence to process")
 
     # Define the function schema for function calling
     company_info_function = {
         "name": "extract_company_info",
-        "description": "Extracts company information from the provided text.",
+        "description": "Extracts company information from the provided text. Response should be 'unknown' if unable to determine high quality and accurate response from text. Always use british english.",
         "parameters": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "The name of the company."},
                 "description": {
                     "type": "string",
-                    "description": "A description of the company.",
+                    "description": "A description of the company. Approx 200 words which would enable someone with no knowledge of the company to understand the company and what they do / are known for. It should focus on what the companies product / offering is rather than its technology or implementation unless that is core to it's offering.",
                 },
                 "sector": {
                     "type": "string",
-                    "description": "The sector the company operates in.",
+                    "description": "The sector the company operates in. i.e. consumer electronics, financial markets...",
                 },
                 "size": {
                     "type": "string",
-                    "description": "The size of the company (small, medium, large).",
-                    "enum": ["small", "medium", "large"],
+                    "description": "The size of the company (unknown, micro, small, medium, large). Roughly aligned with; Micro-enterprise: A business with up to 10 employees < £1.5 million revenue, Small enterprise: A business with 10 to 49 employees < £15 million revenue, Medium-sized enterprise: A business with 50 to 249 employees < £54 million revenue, Large enterprise: A business with 250 or more employees ",
+                    "enum": ["unknown", "micro", "small", "medium", "large"],
                 },
                 "business_type": {
                     "type": "string",
-                    "description": "The type of business the company is.",
+                    "description": "The type of business the company is. Is it a b2b, b2c maybe a mix of multiple",
                 },
                 "technology_stack": {
                     "type": "string",
-                    "description": "Technologies used by the company.",
+                    "description": "The main technologies used by the company and it's platforms.",
                 },
                 "areas_of_focus": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Areas of focus of the company.",
+                    "description": "Areas of focus of the company. The markets it focuses on i.e education, consumer, finance, entertainment and the types of business it does i.e. product manufacture, software development...",
                 },
             },
-            "required": ["name"],
+            "required": [
+                "description",
+                "sector",
+                "size",
+                "business_type",
+                "technology_stack",
+                "areas_of_focus",
+            ],
         },
     }
 
-    # Define the system prompt
     system_prompt = (
-        "You are an AI assistant that extracts company information from the provided text. "
-        "Extract the information and format it as per the specified JSON schema."
+        "You are an expert that systematically reads understand and consolidates company information from a body of text. Always use british english. "
+        "Below is such a body of text made up from summaries of multiple files. "
+        "Extract the information and format it as per the specified function schema. "
     )
 
-    # Prepare the messages
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": combined_text},
+        {"role": "user", "content": db_company.raw_evidence},
     ]
 
-    # Set the OpenAI API key
-
-    # Call the OpenAI API
     try:
-        response = client.chat.completions.create(
+        response = openAiClient.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             functions=[company_info_function],
@@ -775,60 +1886,20 @@ async def parse_evidence_for_company(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
-    # Extract the function call arguments
+    # Extract and process the function call arguments
     function_call = response.choices[0].message.function_call
-    arguments_str = function_call["arguments"]
-
-    # Parse the arguments as JSON
-    try:
-        arguments = json.loads(arguments_str)
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail="Failed to parse LLM response")
-
-    # Map the extracted data to company fields
-    company_data = {}
-    if "name" in arguments:
-        company_data["name"] = arguments["name"]
-    if "description" in arguments:
-        company_data["description"] = arguments["description"]
-    if "sector" in arguments:
-        company_data["sector"] = arguments["sector"]
-    if "size" in arguments:
-        size = arguments["size"].lower()
-        if size in ["small", "medium", "large"]:
-            company_data["size"] = size
-    if "business_type" in arguments:
-        company_data["business_type"] = arguments["business_type"]
-    if "technology_stack" in arguments:
-        company_data["technology_stack"] = arguments["technology_stack"]
-    if "areas_of_focus" in arguments:
-        areas_of_focus = arguments["areas_of_focus"]
-        if isinstance(areas_of_focus, list):
-            if len(areas_of_focus) > 10:
-                areas_of_focus = areas_of_focus[:10]
-            areas_of_focus = [area for area in areas_of_focus if len(area) <= 50]
-            company_data["areas_of_focus"] = ",".join(areas_of_focus)
-
-    if not company_data:
-        raise HTTPException(status_code=500, detail="No valid company data extracted")
-
-    # Get or create the company record
-    db_company = db.query(CompanyDB).filter(CompanyDB.audit_id == audit_id).first()
-    if db_company is None:
-        db_company = CompanyDB(audit_id=audit_id)
+    arguments = json.loads(function_call.arguments)
 
     # Update the company record
-    for key, value in company_data.items():
+    for key, value in arguments.items():
+        if key == "areas_of_focus" and isinstance(value, list):
+            value = ",".join(value[:10])  # Limit to 10 areas, join as string
         setattr(db_company, key, value)
 
-    # Mark that the company was updated from evidence
     db_company.updated_from_evidence = True
-
-    db.add(db_company)
     db.commit()
     db.refresh(db_company)
 
-    # Return the updated company data
     return db_company
 
 
@@ -837,40 +1908,94 @@ async def upload_evidence_file(
     audit_id: str,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
-    # Create directory for audit if it doesn't exist
-    os.makedirs(f"evidence_files/{audit_id}", exist_ok=True)
+    # Create directory for evidence files if it doesn't exist
+    evidence_dir = "evidence_files"
+    os.makedirs(evidence_dir, exist_ok=True)
 
-    # Generate a unique filename to avoid conflicts
-    unique_filename = f"{uuid.uuid4()}_{file.filename}"
-    file_path = f"evidence_files/{audit_id}/{unique_filename}"
+    # Read file content and compute hash
+    file_content = await file.read()
+    file_hash = hashlib.sha256(file_content).hexdigest()
 
-    # Save file
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Determine file extension and create the new filename
+    file_extension = os.path.splitext(file.filename)[1]
+    hash_filename = f"{file_hash}{file_extension}"
+    file_path = os.path.join(evidence_dir, hash_filename)
 
-    db_file = EvidenceFileDB(
-        audit_id=audit_id,
-        filename=file.filename,
-        file_type=file.content_type,
-        status="pending",
-        file_path=file_path,
+    # Check if this file is already associated with this audit
+    existing_association = (
+        db.query(EvidenceFileDB)
+        .filter(
+            and_(
+                EvidenceFileDB.audit_id == audit_id,
+                EvidenceFileDB.file_path == file_path,
+            )
+        )
+        .first()
     )
+
+    if existing_association:
+        raise HTTPException(
+            status_code=400,
+            detail="This file has already been uploaded for this audit.",
+        )
+
+    # Check if a processed file with this hash already exists in the database
+    existing_file = (
+        db.query(EvidenceFileDB)
+        .filter(
+            and_(
+                EvidenceFileDB.file_path == file_path,
+                EvidenceFileDB.status == "complete",
+                EvidenceFileDB.text_content != None,
+            )
+        )
+        .first()
+    )
+
+    if existing_file:
+        # File exists and has been processed, create a new entry with existing content
+        db_file = EvidenceFileDB(
+            audit_id=audit_id,
+            filename=file.filename,  # Keep the original filename in the database
+            file_type=file.content_type,
+            status="complete",
+            file_path=file_path,
+            text_content=existing_file.text_content,
+            processed_at=existing_file.processed_at,
+        )
+    else:
+        # File doesn't exist or hasn't been processed, save it and queue for processing
+        if not os.path.exists(file_path):
+            with open(file_path, "wb") as buffer:
+                buffer.write(file_content)
+
+        db_file = EvidenceFileDB(
+            audit_id=audit_id,
+            filename=file.filename,
+            file_type=file.content_type,
+            status="pending",
+            file_path=file_path,
+        )
+
     db.add(db_file)
     db.commit()
     db.refresh(db_file)
 
-    # Start processing in background
-    background_tasks.add_task(process_file, file_path, db, db_file.id)
+    # Start processing in background only if it's a new file that needs processing
+    if db_file.status == "pending":
+        background_tasks.add_task(process_file, file_path, db, db_file.id)
 
     return db_file
 
 
 @app.get("/audits/{audit_id}/evidence-files", response_model=List[EvidenceFileResponse])
 async def list_evidence_files(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
     files = db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id).all()
     return files
@@ -883,7 +2008,7 @@ async def get_evidence_file(
     audit_id: str,
     file_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     file = (
         db.query(EvidenceFileDB)
@@ -900,7 +2025,7 @@ async def get_evidence_file_content(
     audit_id: str,
     file_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     file = (
         db.query(EvidenceFileDB)
@@ -924,7 +2049,7 @@ async def delete_evidence_file(
     audit_id: str,
     file_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     file = (
         db.query(EvidenceFileDB)
@@ -953,7 +2078,7 @@ async def check_evidence_file_status(
     audit_id: str,
     file_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     file = (
         db.query(EvidenceFileDB)
@@ -965,153 +2090,251 @@ async def check_evidence_file_status(
     return file
 
 
-@app.post("/audits/{audit_id}/criteria", response_model=CriteriaResponse)
-async def add_criteria(
-    audit_id: str,
-    criteria: CriteriaCreate,
+@app.get("/criteria", response_model=List[CriteriaResponse])
+async def list_base_criteria(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    db_criteria = CriteriaDB(**criteria.model_dump(), audit_id=audit_id)
-    db.add(db_criteria)
-    db.commit()
-    db.refresh(db_criteria)
-    return db_criteria
+    base_criteria = (
+        db.query(CriteriaDB)
+        .filter(CriteriaDB.is_specific_to_audit == None)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return base_criteria
+
+
+@app.get("/criteria/custom", response_model=List[CriteriaResponse])
+async def list_custom_criteria(
+    audit_id: Optional[str] = Query(
+        None, description="Filter criteria by specific audit"
+    ),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    query = db.query(CriteriaDB).filter(CriteriaDB.is_specific_to_audit != None)
+
+    if audit_id:
+        query = query.filter(CriteriaDB.is_specific_to_audit == audit_id)
+
+    custom_criteria = query.offset(skip).limit(limit).all()
+    return custom_criteria
 
 
 @app.get("/audits/{audit_id}/criteria", response_model=List[CriteriaResponse])
-async def list_criteria(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+async def get_audit_criteria(
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    criteria = db.query(CriteriaDB).filter(CriteriaDB.audit_id == audit_id).all()
-    return criteria
+    audit_criteria = (
+        db.query(AuditCriteriaDB)
+        .filter(AuditCriteriaDB.audit_id == audit_id)
+        .options(joinedload(AuditCriteriaDB.criteria))
+        .all()
+    )
+    return [ac.criteria for ac in audit_criteria]
 
 
-@app.get("/audits/{audit_id}/criteria", response_model=List[CriteriaResponse])
-async def get_all_criteria(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
-):
-    criteria = db.query(CriteriaDB).filter(CriteriaDB.audit_id == audit_id).all()
-    return criteria
-
-
-@app.post("/audits/{audit_id}/criteria", response_model=CriteriaResponse)
+@app.post("/audits/{audit_id}/criteria/custom", response_model=CriteriaResponse)
 async def add_custom_criteria(
     audit_id: str,
     criteria: CriteriaCreate,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
+    # Verify the audit exists
+    audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
+    if not audit:
+        raise HTTPException(status_code=404, detail="Audit not found")
+
+    # Create custom criteria
     db_criteria = CriteriaDB(
-        audit_id=audit_id,
-        parent_id=criteria.parent_id,
         title=criteria.title,
         description=criteria.description,
+        parent_id=criteria.parent_id,
         maturity_definitions=criteria.maturity_definitions,
+        is_specific_to_audit=audit_id,
+        section=criteria.section,
     )
     db.add(db_criteria)
-    db.commit()
-    db.refresh(db_criteria)
-    return db_criteria
+    db.flush()  # This assigns an ID to db_criteria without committing the transaction
 
-
-@app.put("/audits/{audit_id}/criteria/{criteria_id}", response_model=CriteriaResponse)
-async def update_existing_criteria(
-    audit_id: str,
-    criteria_id: str,
-    criteria: CriteriaCreate,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
-):
-    db_criteria = (
-        db.query(CriteriaDB)
-        .filter(CriteriaDB.id == criteria_id, CriteriaDB.audit_id == audit_id)
-        .first()
+    # Associate it with the audit
+    audit_criteria = AuditCriteriaDB(
+        audit_id=audit_id,
+        criteria_id=db_criteria.id,
+        expected_maturity_level=criteria.expected_maturity_level,
     )
-    if db_criteria is None:
-        raise HTTPException(status_code=404, detail="Criteria not found")
-
-    db_criteria.title = criteria.title
-    db_criteria.description = criteria.description
-    db_criteria.parent_id = criteria.parent_id
-    db_criteria.maturity_definitions = criteria.maturity_definitions
+    db.add(audit_criteria)
 
     db.commit()
     db.refresh(db_criteria)
+
     return db_criteria
 
 
-@app.get(
-    "/audits/{audit_id}/criteria/selected",
-    response_model=List[CriteriaSelectionResponse],
-)
-async def get_selected_criteria(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+@app.put("/criteria/custom/{criteria_id}", response_model=CriteriaResponse)
+async def update_custom_criteria(
+    criteria_id: str,
+    update_data: UpdateCustomCriteriaRequest,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    selected_criteria = (
-        db.query(CriteriaDB)
-        .filter(CriteriaDB.audit_id == audit_id, CriteriaDB.selected == True)
+    # Verify the criteria exists and is custom
+    criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
+    if not criteria:
+        raise HTTPException(status_code=404, detail="Criteria not found")
+    if criteria.is_specific_to_audit is None:
+        raise HTTPException(status_code=400, detail="Cannot update base criteria")
+
+    # Prepare the update data
+    update_dict = update_data.dict(exclude_unset=True)
+    if not update_dict:
+        raise HTTPException(status_code=400, detail="No update data provided")
+
+    # Update the criteria
+    for key, value in update_dict.items():
+        setattr(criteria, key, value)
+
+    db.commit()
+    db.refresh(criteria)
+
+    return db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
+
+
+@app.delete(
+    "/criteria/custom/{criteria_id}", response_model=DeleteCustomCriteriaResponse
+)
+async def delete_custom_criteria(
+    criteria_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    # Verify the criteria exists and is custom
+    criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
+    if not criteria:
+        raise HTTPException(status_code=404, detail="Criteria not found")
+    if criteria.is_specific_to_audit:
+        raise HTTPException(status_code=400, detail="Cannot delete base criteria")
+
+    # Check if the criteria is in use by any audit
+    associations = (
+        db.query(AuditCriteriaDB)
+        .filter(AuditCriteriaDB.criteria_id == criteria_id)
         .all()
     )
-    return selected_criteria
+    if associations:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete criteria as it is still in use by one or more audits",
+        )
+
+    # If not in use, delete the criteria
+    db.delete(criteria)
+    db.commit()
+
+    return DeleteCustomCriteriaResponse(
+        message="Custom criteria successfully deleted", criteria_id=criteria_id
+    )
 
 
 @app.post(
-    "/audits/{audit_id}/criteria/selected",
-    response_model=List[CriteriaSelectionResponse],
+    "/audits/{audit_id}/criteria/selected", response_model=CriteriaSelectionResponse
 )
 async def select_criteria(
     audit_id: str,
     criteria_select: CriteriaSelect,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    criteria_to_update = (
-        db.query(CriteriaDB)
-        .filter(
-            CriteriaDB.audit_id == audit_id,
-            CriteriaDB.id.in_(criteria_select.criteria_ids),
-        )
-        .all()
-    )
+    # Verify the audit exists
+    audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
+    if not audit:
+        raise HTTPException(status_code=404, detail="Audit not found")
 
-    if len(criteria_to_update) != len(criteria_select.criteria_ids):
-        raise HTTPException(status_code=404, detail="One or more criteria not found")
-
-    for criteria in criteria_to_update:
-        criteria.selected = True
-        criteria.expected_maturity_level = criteria_select.expected_maturity_levels.get(
-            criteria.id
-        )
-
-    db.commit()
-    return criteria_to_update
-
-
-@app.delete(
-    "/audits/{audit_id}/criteria/selected/{criteria_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def deselect_criteria(
-    audit_id: str,
-    criteria_id: str,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
-):
+    # Fetch the criterion
     criteria = (
         db.query(CriteriaDB)
-        .filter(CriteriaDB.audit_id == audit_id, CriteriaDB.id == criteria_id)
+        .filter(CriteriaDB.id == criteria_select.criteria_id)
+        .first()
+    )
+    if not criteria:
+        raise HTTPException(status_code=404, detail="Criterion not found")
+
+    # Check if an association already exists
+    existing_association = (
+        db.query(AuditCriteriaDB)
+        .filter(
+            AuditCriteriaDB.audit_id == audit_id,
+            AuditCriteriaDB.criteria_id == criteria_select.criteria_id,
+        )
         .first()
     )
 
-    if criteria is None:
-        raise HTTPException(status_code=404, detail="Criteria not found")
+    if existing_association:
+        # Update existing association
+        existing_association.expected_maturity_level = (
+            criteria_select.expected_maturity_level
+        )
+        db.commit()
+        return existing_association
+    else:
+        # Create new association
+        new_association = AuditCriteriaDB(
+            audit_id=audit_id,
+            criteria_id=criteria_select.criteria_id,
+            expected_maturity_level=criteria_select.expected_maturity_level,
+        )
+        db.add(new_association)
+        db.commit()
+        db.refresh(new_association)
+        return new_association
 
-    criteria.selected = False
-    criteria.expected_maturity_level = None
+
+@app.delete(
+    "/audits/{audit_id}/criteria/selected", response_model=RemoveCriteriaResponse
+)
+async def remove_selected_criteria(
+    audit_id: str,
+    criteria_remove: RemoveCriteriaRequest,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    # Verify the audit exists
+    audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
+    if not audit:
+        raise HTTPException(status_code=404, detail="Audit not found")
+
+    # Check if the association exists
+    existing_association = (
+        db.query(AuditCriteriaDB)
+        .filter(
+            AuditCriteriaDB.audit_id == audit_id,
+            AuditCriteriaDB.criteria_id == criteria_remove.criteria_id,
+        )
+        .first()
+    )
+
+    if not existing_association:
+        raise HTTPException(
+            status_code=404, detail="Criteria is not associated with this audit"
+        )
+
+    # Remove the association
+    db.delete(existing_association)
     db.commit()
 
-    return {"message": "Criteria deselected successfully"}
+    return RemoveCriteriaResponse(
+        message="Criteria successfully removed from the audit",
+        audit_id=audit_id,
+        criteria_id=criteria_remove.criteria_id,
+    )
 
 
 @app.post(
@@ -1119,7 +2342,9 @@ async def deselect_criteria(
     response_model=List[CriteriaSelectionResponse],
 )
 async def preselect_criteria(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
     # This is a placeholder implementation. In a real-world scenario,
     # you would implement logic to analyze the audit data and preselect criteria.
@@ -1137,15 +2362,6 @@ async def preselect_criteria(
     return criteria_to_preselect
 
 
-# Modify the existing get_all_criteria endpoint to include selection information
-@app.get("/audits/{audit_id}/criteria", response_model=List[CriteriaSelectionResponse])
-async def get_all_criteria(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
-):
-    criteria = db.query(CriteriaDB).filter(CriteriaDB.audit_id == audit_id).all()
-    return criteria
-
-
 @app.post(
     "/audits/{audit_id}/criteria/{criteria_id}/actions/extract-evidence",
     status_code=status.HTTP_202_ACCEPTED,
@@ -1155,74 +2371,266 @@ async def extract_evidence_for_criteria(
     criteria_id: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    # Check if the audit and criteria exist
-    criteria = (
-        db.query(CriteriaDB)
-        .filter(CriteriaDB.id == criteria_id, CriteriaDB.audit_id == audit_id)
-        .first()
-    )
+    # Check if the criteria exists
+    criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
     if not criteria:
-        raise HTTPException(status_code=404, detail="Audit or Criteria not found")
+        raise HTTPException(status_code=404, detail="Criteria not found")
 
-    # Simulate evidence extraction in the background
-    background_tasks.add_task(simulate_evidence_extraction, db, audit_id, criteria_id)
+    # Start evidence extraction in the background
+    background_tasks.add_task(process_evidence_for_criteria, audit_id, criteria_id)
 
     return {"message": "Evidence extraction started"}
 
 
+def find_quote_start_position(quote: str, document: str) -> Optional[int]:
+    # Set the maximum allowed Levenshtein distance (10% of the quote length or at least 2)
+    max_l_dist = max(2, int(len(quote) * 0.1))
+
+    # Find approximate matches
+    matches = find_near_matches(quote, document, max_l_dist=max_l_dist)
+
+    if matches:
+        # Return the start position of the best match (smallest Levenshtein distance)
+        best_match = min(matches, key=lambda x: x.dist)
+        return best_match.start
+    else:
+        return None
+
+
+def process_evidence_for_criteria(audit_id: str, criteria_id: str):
+    db = SessionLocal()
+    try:
+        # Get the criteria
+        criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
+        if not criteria:
+            print(f"Criteria {criteria_id} not found.")
+            return
+
+        # Process evidence files
+        evidence_files = (
+            db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id).all()
+        )
+
+        for file in evidence_files:
+            # Check if already processed for this criteria
+            existing_evidence = (
+                db.query(EvidenceDB)
+                .filter(
+                    EvidenceDB.audit_id == audit_id,
+                    EvidenceDB.criteria_id == criteria_id,
+                    EvidenceDB.source == "evidence_file",
+                    EvidenceDB.source_id == file.id,
+                )
+                .first()
+            )
+            if existing_evidence:
+                continue  # Already processed this file for this criteria
+
+            if not file.text_content:
+                continue  # No content to process
+
+            # Extract evidence using LLM
+            summary, extracted_evidence_list = extract_evidence_from_text(
+                file.text_content, criteria
+            )
+
+            if summary:
+                new_summary_evidence = EvidenceDB(
+                    audit_id=audit_id,
+                    criteria_id=criteria_id,
+                    content=summary,
+                    evidence_type="summary",
+                    source="evidence_file",
+                    source_id=file.id,
+                )
+                db.add(new_summary_evidence)
+
+            # Store the extracted quotes
+            for evidence_text in extracted_evidence_list:
+                # Find the start position
+                start_position = find_quote_start_position(
+                    evidence_text, file.text_content
+                )
+
+                new_quote_evidence = EvidenceDB(
+                    audit_id=audit_id,
+                    criteria_id=criteria_id,
+                    content=evidence_text,
+                    evidence_type="quote",
+                    source="evidence_file",
+                    source_id=file.id,
+                    start_position=start_position,
+                )
+                db.add(new_quote_evidence)
+
+            db.commit()
+
+    except Exception as e:
+        print(
+            f"Error processing evidence for audit {audit_id} and criteria {criteria_id}: {str(e)}"
+        )
+    finally:
+        db.close()
+
+
+def extract_evidence_from_text(
+    content: str, criteria: CriteriaDB
+) -> Tuple[str, List[str]]:
+    # Build the messages for the LLM
+    system_prompt = (
+        "You are an expert auditor tasked with extracting relevant evidence from documents based on specific criteria. Always use british english."
+        "Given the criteria and a document, extract and return a summary and relevant quotes or references from the document that pertain to the criteria. "
+        "The summary should be a concise overview of the relevant content, and the quotes should be sentences to paragraphs in length that help an expert auditor assess the maturity of the organization's technology and product functions. "
+        "Provide the output in a structured JSON format as per the function schema.\n\n"
+        # Include examples in the prompt
+        "Example Criteria:\n"
+        "Title: Data-Driven Decision Making and Analytics\n"
+        "Description: The use of data and analytics to inform product decisions and measure success.\n"
+        "Maturity Definitions:\n"
+        "novice: Data collection is minimal or inconsistent. Decisions are made based on intuition rather than data.\n"
+        "intermediate: Basic analytics are implemented, with key metrics being tracked. However, data is not yet fully integrated into decision-making processes.\n"
+        "advanced: Data is deeply integrated into the decision-making process, with advanced analytics and metrics tracking. Decisions are always data-driven.\n\n"
+        "Example Document Excerpt:\n"
+        "\"Sometimes we go out for dinner together as a team. We make use of ruby on rails for our website. Our team occasionally looks at customer feedback, but we mostly rely on our experience to decide on new features. We haven't set up any analytics tools yet. Our product is live in Italy and Spain. It's been lovely to meet you all.\"\n\n"
+        "Example Output:\n"
+        "{\n"
+        '  "has_relevant_content": true,\n'
+        '  "summary": "The company relies mainly on experience rather than data analytics for product decisions, indicating minimal use of data-driven decision-making.",\n'
+        '  "quotes": [\n'
+        '    "Our team occasionally looks at customer feedback, but we mostly rely on our experience to decide on new features. We haven\'t set up any analytics tools yet."\n'
+        "  ]\n"
+        "}\n\n"
+        "If the document is irrelevant, set 'has_relevant_content' to false, and provide empty 'summary' and 'quotes'. Now, systematically read through the source document and perform the identification and extraction based on the provided criteria."
+    )
+
+    # Convert maturity definitions to string
+    maturity_definitions_str = (
+        "\n".join(
+            [
+                f"{level}: {desc}"
+                for level, desc in criteria.maturity_definitions.items()
+            ]
+        )
+        if isinstance(criteria.maturity_definitions, dict)
+        else str(criteria.maturity_definitions)
+    )
+
+    user_message = (
+        f"Criteria:\nTitle: {criteria.title}\nDescription: {criteria.description}\n"
+        f"Maturity Definitions:\n{maturity_definitions_str}\n\n"
+        f"Source Document Content:\n{content}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    # Define the function schema
+    functions = [
+        {
+            "name": "extract_relevant_content",
+            "description": "Extracts relevant content from the document that pertains to the criteria. Always use british english.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "has_relevant_content": {
+                        "type": "boolean",
+                        "description": "True if the document has relevant content for the criteria, false otherwise.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "A concise summary of the relevant content within the document pertaining to the criteria. Should be empty if 'has_relevant_content' is false.",
+                    },
+                    "quotes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "A list of highly relevant exact quotes from the source. Each one would help an expert auditor to assess the maturity of a company's tech/product function. Should be empty if 'has_relevant_content' is false.",
+                    },
+                },
+                "required": ["has_relevant_content"],
+            },
+        }
+    ]
+
+    # Call the OpenAI API with function calling
+    try:
+        response = openAiClient.chat.completions.create(
+            model="gpt-4o-mini",  # Update to the appropriate model
+            messages=messages,
+            functions=functions,
+            function_call={"name": "extract_relevant_content"},
+            max_tokens=2000,
+        )
+
+        # Extract the function call arguments
+        function_call = response.choices[0].message.function_call
+        if function_call and function_call.name == "extract_relevant_content":
+            arguments = json.loads(function_call.arguments)
+            has_relevant_content = arguments.get("has_relevant_content", False)
+            if has_relevant_content:
+                summary = arguments.get("summary", "")
+                quotes = arguments.get("quotes", [])
+                return summary, quotes
+            else:
+                return "", []
+        else:
+            print("Function call did not return as expected.")
+            return "", []
+
+    except Exception as e:
+        print(f"Error extracting evidence: {str(e)}")
+        return "", []
+
+
 @app.get(
     "/audits/{audit_id}/criteria/{criteria_id}/evidence",
-    response_model=List[EvidenceResponse],
+    response_model=CriteriaEvidenceResponse,
 )
 async def get_evidence_for_criteria(
     audit_id: str,
     criteria_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
+    # Fetch evidence
     evidence = (
         db.query(EvidenceDB)
         .filter(EvidenceDB.audit_id == audit_id, EvidenceDB.criteria_id == criteria_id)
         .all()
     )
 
-    if not evidence:
-        raise HTTPException(
-            status_code=404, detail="No evidence found for the given criteria"
-        )
-
-    return evidence
-
-
-# Add this function to simulate evidence extraction
-def simulate_evidence_extraction(db: Session, audit_id: str, criteria_id: str):
-    # Simulate processing delay
-    # time.sleep(5)
-
-    # Get all evidence files for the audit
-    evidence_files = (
-        db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id).all()
+    # Fetch questions with their answers
+    questions = (
+        db.query(QuestionDB)
+        .options(joinedload(QuestionDB.answers))
+        .filter(QuestionDB.audit_id == audit_id, QuestionDB.criteria_id == criteria_id)
+        .all()
     )
 
-    # Simulate extracting evidence from each file
-    for file in evidence_files:
-        # Generate some random "extracted" content
-        extracted_content = f"Simulated evidence extracted from {file.filename}"
-
-        # Create a new evidence entry
-        new_evidence = EvidenceDB(
-            audit_id=audit_id,
-            criteria_id=criteria_id,
-            content=extracted_content,
-            source="evidence_file",
-            source_id=file.id,
+    if not evidence and not questions:
+        raise HTTPException(
+            status_code=404,
+            detail="No evidence or questions found for the given criteria and audit",
         )
-        db.add(new_evidence)
 
-    # Commit the changes
-    db.commit()
+    # Prepare the response
+    response = CriteriaEvidenceResponse(
+        evidence=[EvidenceResponse.model_validate(e) for e in evidence],
+        questions=[
+            QuestionResponse(
+                id=q.id,
+                text=q.text,
+                created_at=q.created_at,
+                answers=[AnswerResponse.model_validate(a) for a in q.answers],
+            )
+            for q in questions
+        ],
+    )
+
+    return response
 
 
 @app.post(
@@ -1233,25 +2641,44 @@ async def generate_questions(
     audit_id: str,
     criteria_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    # Check if the audit and criteria exist
-    criteria = (
-        db.query(CriteriaDB)
-        .filter(CriteriaDB.id == criteria_id, CriteriaDB.audit_id == audit_id)
-        .first()
-    )
-    if not criteria:
-        raise HTTPException(status_code=404, detail="Audit or Criteria not found")
+    # Check if the audit exists
+    audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
+    if not audit:
+        raise HTTPException(status_code=404, detail="Audit not found")
 
-    # Simulate question generation (in a real scenario, this would be done by an LLM)
-    questions = simulate_question_generation(criteria)
+    # Check if the criteria exists
+    criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
+    if not criteria:
+        raise HTTPException(status_code=404, detail="Criteria not found")
+
+    # Fetch all evidence for this criteria and audit
+    evidence_entries = (
+        db.query(EvidenceDB)
+        .filter(
+            EvidenceDB.audit_id == audit_id,
+            EvidenceDB.criteria_id == criteria_id,
+        )
+        .all()
+    )
+
+    # Collect evidence content
+    evidence_content = ""
+    for evidence in evidence_entries:
+        if evidence.evidence_type == "summary":
+            evidence_content += f"Summary: {evidence.content}\n\n"
+        elif evidence.evidence_type == "quote":
+            evidence_content += f"Quote: {evidence.content}\n\n"
+
+    # Generate questions using LLM
+    questions = generate_questions_using_llm(criteria, evidence_content)
 
     # Save generated questions to the database
     db_questions = []
-    for question in questions:
+    for question_text in questions:
         db_question = QuestionDB(
-            audit_id=audit_id, criteria_id=criteria_id, text=question
+            audit_id=audit_id, criteria_id=criteria_id, text=question_text
         )
         db.add(db_question)
         db_questions.append(db_question)
@@ -1263,11 +2690,99 @@ async def generate_questions(
     return db_questions
 
 
+def generate_questions_using_llm(
+    criteria: CriteriaDB, evidence_content: str
+) -> List[str]:
+    # Build the prompt
+    system_prompt = (
+        "You are an expert auditor tasked with assessing the maturity of an organization's technical and product departments based on specific criteria and available evidence. Always use british english. "
+        "Your goal is to determine whether the current evidence is sufficient to assess the maturity level. "
+        "If the evidence is sufficient, generate a number of additional questions to dig deeper into the most relevant areas of the current evidence. "
+        "If the evidence is not sufficient, generate questions that, when answered, would fill the gaps in knowledge so that an expert auditor could assess the maturity. "
+        "Provide the output in a structured JSON format as per the function schema."
+    )
+
+    # Convert maturity definitions to string
+    maturity_definitions_str = (
+        "\n".join(
+            [
+                f"{level}: {desc}"
+                for level, desc in criteria.maturity_definitions.items()
+            ]
+        )
+        if isinstance(criteria.maturity_definitions, dict)
+        else str(criteria.maturity_definitions)
+    )
+
+    user_message = (
+        f"Criteria:\n"
+        f"Title: {criteria.title}\n"
+        f"Description: {criteria.description}\n"
+        f"Maturity Definitions:\n{maturity_definitions_str}\n\n"
+        f"Available Evidence:\n{evidence_content}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    # Define the function schema
+    functions = [
+        {
+            "name": "generate_questions",
+            "description": "Generates questions to help assess the maturity level based on the criteria and available evidence. Always use british english.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "evidence_sufficient": {
+                        "type": "boolean",
+                        "description": "True if the current evidence is sufficient to assess the maturity level, False otherwise.",
+                    },
+                    "questions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "A list of questions. If evidence_sufficient is True, the questions should dig deeper into the most relevant areas of the current evidence. If evidence_sufficient is False, the questions should be the the minimal set of questions needed to fill the gaps in knowledge.",
+                    },
+                },
+                "required": ["evidence_sufficient", "questions"],
+            },
+        }
+    ]
+
+    # Call the OpenAI API with function calling
+    try:
+        response = openAiClient.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            functions=functions,
+            function_call={"name": "generate_questions"},
+            max_tokens=2000,
+            temperature=0.7,
+        )
+
+        # Extract the function call arguments
+        function_call = response.choices[0].message.function_call
+        if function_call and function_call.name == "generate_questions":
+            arguments = json.loads(function_call.arguments)
+            questions = arguments.get("questions", [])
+            return questions
+        else:
+            print("Function call did not return as expected.")
+            return []
+
+    except Exception as e:
+        print(f"Error generating questions: {str(e)}")
+        return []
+
+
 @app.get(
     "/audits/{audit_id}/questions/unanswered", response_model=List[QuestionResponse]
 )
 async def get_unanswered_questions(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
     questions = (
         db.query(QuestionDB)
@@ -1283,7 +2798,7 @@ async def get_question_details(
     audit_id: str,
     question_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     question = (
         db.query(QuestionDB)
@@ -1297,37 +2812,6 @@ async def get_question_details(
     return question
 
 
-def simulate_question_generation(criteria: CriteriaDB) -> List[str]:
-    maturity_levels = criteria.maturity_definitions
-    if isinstance(maturity_levels, str):
-        try:
-            maturity_levels = json.loads(maturity_levels)
-        except json.JSONDecodeError:
-            # If it's not a valid JSON string, use it as is
-            maturity_levels = {
-                "novice": maturity_levels,
-                "intermediate": maturity_levels,
-                "advanced": maturity_levels,
-            }
-    elif not isinstance(maturity_levels, dict):
-        # If it's neither a string nor a dict, use a default dictionary
-        maturity_levels = {
-            "novice": "Novice level",
-            "intermediate": "Intermediate level",
-            "advanced": "Advanced level",
-        }
-
-    questions = [
-        f"How does the company's approach align with the '{criteria.title}' criteria?",
-        f"What evidence supports the company's maturity level in '{criteria.title}'?",
-        f"How does the company plan to improve in the area of '{criteria.title}'?",
-        f"What challenges does the company face in achieving the '{maturity_levels['advanced']}' level for this criteria?",
-        f"Can you provide specific examples of how the company demonstrates the '{maturity_levels['intermediate']}' level in this area?",
-    ]
-
-    return random.sample(questions, random.randint(3, 5))
-
-
 @app.post(
     "/audits/{audit_id}/questions/{question_id}/answers", response_model=AnswerResponse
 )
@@ -1336,7 +2820,7 @@ async def submit_answer(
     question_id: str,
     answer: AnswerCreate,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     question = (
         db.query(QuestionDB)
@@ -1359,7 +2843,9 @@ async def submit_answer(
 
 @app.get("/audits/{audit_id}/questions", response_model=List[QuestionResponse])
 async def get_all_questions(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
     questions = (
         db.query(QuestionDB)
@@ -1378,7 +2864,7 @@ async def get_answers_for_question(
     audit_id: str,
     question_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     question = (
         db.query(QuestionDB)
@@ -1402,7 +2888,7 @@ async def get_answer_details(
     question_id: str,
     answer_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     answer = (
         db.query(AnswerDB)
@@ -1426,7 +2912,7 @@ async def get_maturity_assessment(
     audit_id: str,
     criteria_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     assessment = (
         db.query(MaturityAssessmentDB)
@@ -1452,7 +2938,7 @@ async def set_maturity_assessment(
     criteria_id: str,
     assessment: MaturityAssessmentCreate,
     db: Session = Depends(get_db),
-    api_key: str = Depends(get_api_key),
+    current_user: UserDB = Depends(get_current_user),
 ):
     # Check if the audit and criteria exist
     criteria = (
@@ -1499,7 +2985,9 @@ async def set_maturity_assessment(
     "/audits/{audit_id}/assessments", response_model=List[MaturityAssessmentResponse]
 )
 async def get_all_maturity_assessments(
-    audit_id: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)
+    audit_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
     assessments = (
         db.query(MaturityAssessmentDB)

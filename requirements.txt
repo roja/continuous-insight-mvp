@@ -1,3 +1,4 @@
+aiofiles==24.1.0
 annotated-types==0.7.0
 anyio==4.6.0
 appnope==0.1.4
@@ -54,7 +55,9 @@ pure_eval==0.2.3
 pydantic==2.9.2
 pydantic-settings==2.5.2
 pydantic_core==2.23.4
+pydub==0.25.1
 Pygments==2.18.0
+pypandoc_binary==1.14
 pytest==8.3.3
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
