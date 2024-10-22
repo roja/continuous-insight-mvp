@@ -83,7 +83,7 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 from datetime import datetime, timezone, timedelta
 from enum import Enum
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Callable
 from pydub import AudioSegment
 
 from fastapi import (
@@ -100,7 +100,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict, validator
@@ -143,6 +143,8 @@ from jose import JWTError, jwt
 
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.config import Config
+
+from functools import wraps
 
 
 class Settings(BaseSettings):
@@ -199,6 +201,7 @@ class UserRole(str, Enum):
     ORGANISATION_USER = "organisation_user"
     DELEGATED_USER = "delegated_user"
     OBSERVER_LEAD = "observer_lead"
+    OBSERVER_USER = "observer_user"
 
 
 class UserDB(Base):
@@ -208,15 +211,21 @@ class UserDB(Base):
     name = Column(String)
     oauth_provider = Column(String)  # 'google' or 'apple'
     oauth_id = Column(String, unique=True)
-    is_system_auditor = Column(
+    is_global_administrator = Column(
         Boolean, default=False
     )  # Flag for system-wide auditor access
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
-    company_associations = relationship("UserCompanyAssociation", back_populates="user")
-    companies = relationship("CompanyDB", secondary="user_company_associations")
+    company_associations = relationship(
+        "UserCompanyAssociation", back_populates="user", overlaps="companies,users"
+    )
+    companies = relationship(
+        "CompanyDB",
+        secondary="user_company_associations",
+        viewonly=True,  # Make this a read-only relationship
+    )
 
     @property
     def company_roles(self) -> Dict[str, UserRole]:
@@ -233,7 +242,7 @@ class UserDB(Base):
 
     def has_company_role(self, company_id: str, required_roles: List[UserRole]) -> bool:
         """Check if user has any of the required roles for a company"""
-        if self.is_system_auditor:
+        if self.is_global_administrator:
             return True
 
         for assoc in self.company_associations:
@@ -390,8 +399,14 @@ class CompanyDB(Base):
     processed_file_ids = Column(MutableList.as_mutable(JSON), default=[])
 
     audits = relationship("AuditDB", back_populates="company")
-    user_associations = relationship("UserCompanyAssociation", back_populates="company")
-    users = relationship("UserDB", secondary="user_company_associations")
+    user_associations = relationship(
+        "UserCompanyAssociation", back_populates="company", overlaps="users"
+    )
+    users = relationship(
+        "UserDB",
+        secondary="user_company_associations",
+        viewonly=True,  # Make this a read-only relationship
+    )
 
 
 class EvidenceFileDB(Base):
@@ -951,7 +966,7 @@ class UserResponse(BaseModel):
     id: str
     email: str
     name: str
-    is_system_auditor: bool
+    is_global_administrator: bool
     company_associations: List[UserCompanyAssociationResponse]
     created_at: datetime
     updated_at: Optional[datetime]
@@ -1242,6 +1257,83 @@ def verify_jwt_token(token: str):
         return None
 
 
+def authorize_company_access(
+    company_id_param: str = "company_id",
+    audit_id_param: str = "audit_id",
+    required_roles: Optional[List[UserRole]] = None,
+):
+    """
+    A decorator to authorize access to endpoints based on user roles associated with a company.
+
+    Parameters:
+    - company_id_param: The name of the company ID parameter in the path.
+    - audit_id_param: The name of the audit ID parameter in the path.
+    - required_roles: List of UserRole enums that are allowed to access the endpoint.
+
+    If required_roles is None or empty, the function will raise an exception, enforcing explicit role specification.
+    """
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(
+            *args,
+            current_user: UserDB = Depends(get_current_user),
+            db: Session = Depends(get_db),
+            **kwargs,
+        ):
+            # System administrators have unrestricted access
+            if current_user.is_global_administrator:
+                return await func(*args, current_user=current_user, db=db, **kwargs)
+
+            # Ensure that required_roles is provided
+            if not required_roles:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Access control misconfiguration: required_roles must be specified.",
+                )
+
+            # Extract path parameters
+            request: Request = kwargs.get("request")
+            if not request:
+                for arg in args:
+                    if isinstance(arg, Request):
+                        request = arg
+                        break
+
+            if not request:
+                raise HTTPException(status_code=500, detail="Request object not found")
+
+            path_params = request.path_params
+            company_id = path_params.get(company_id_param)
+            audit_id = path_params.get(audit_id_param)
+
+            # Determine the company ID if only audit ID is provided
+            if not company_id and audit_id:
+                audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
+                if not audit:
+                    raise HTTPException(status_code=404, detail="Audit not found")
+                company_id = audit.company_id
+
+            if not company_id:
+                raise HTTPException(
+                    status_code=400, detail="No company_id or audit_id provided in path"
+                )
+
+            # Check if the user has the required role
+            if not current_user.has_company_role(company_id, required_roles):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Insufficient permissions to access this resource",
+                )
+
+            # Call the original endpoint function
+            return await func(*args, current_user=current_user, db=db, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 # FastAPI app
 app = FastAPI()
 
@@ -1504,17 +1596,13 @@ async def login_google(request: Request):
 async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
     try:
         token = await oauth.google.authorize_access_token(request)
-        print("Received token:", json.dumps(token, indent=2))  # Debug print
 
         if "id_token" not in token:
             raise ValueError("No id_token found in the OAuth response")
 
-        # Use google-auth library to verify the token
         idinfo = id_token.verify_oauth2_token(
             token["id_token"], google_auth_requests.Request(), settings.google_client_id
         )
-
-        print("Decoded token info:", json.dumps(idinfo, indent=2))  # Debug print
 
         # Get or create user
         user = (
@@ -1529,7 +1617,7 @@ async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
                 name=idinfo.get("name", "Google User"),
                 oauth_provider="google",
                 oauth_id=idinfo["sub"],
-                role="user",
+                is_global_administrator=False,  # Default new users to not be system auditors
             )
             db.add(user)
             db.commit()
@@ -1602,13 +1690,14 @@ async def verify_token(current_user: UserDB = Depends(get_current_user)):
             "id": current_user.id,
             "email": current_user.email,
             "name": current_user.name,
-            "role": current_user.role,
         }
     }
 
 
 @app.post("/audits", response_model=AuditResponse)
+@authorize_company_access(required_roles=list(UserRole))
 def create_audit(
+    request: Request,
     audit: AuditCreate,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -1641,7 +1730,9 @@ def create_audit(
 
 
 @app.get("/audits/{audit_id}", response_model=AuditResponse)
+@authorize_company_access(required_roles=list(UserRole))
 async def get_audit(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -1653,7 +1744,12 @@ async def get_audit(
 
 
 @app.delete("/audits/{audit_id}", status_code=status.HTTP_204_NO_CONTENT)
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
 async def delete_audit(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -1677,17 +1773,36 @@ async def delete_audit(
 
 @app.get("/audits", response_model=List[AuditResponse])
 async def list_audits(
+    request: Request,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    audits = db.query(AuditDB).offset(skip).limit(limit).all()
+    if current_user.is_global_administrator:
+        audits = db.query(AuditDB).offset(skip).limit(limit).all()
+        return audits
+
+    # Get audits for companies the user has access to
+    audits = (
+        db.query(AuditDB)
+        .join(CompanyDB)
+        .join(UserCompanyAssociation)
+        .filter(UserCompanyAssociation.user_id == current_user.id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     return audits
 
 
 @app.post("/audits/{audit_id}/company", response_model=CompanyResponse)
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
 async def create_company(
+    request: Request,
     audit_id: str,
     company: CompanyCreate,
     db: Session = Depends(get_db),
@@ -1715,18 +1830,34 @@ async def create_company(
 
 
 @app.get("/companies", response_model=List[CompanyListResponse])
-async def list_audits(
+async def list_companies(
+    request: Request,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    companies = db.query(CompanyDB).offset(skip).limit(limit).all()
+    # System administrators can see all companies
+    if current_user.is_global_administrator:
+        companies = db.query(CompanyDB).offset(skip).limit(limit).all()
+        return companies
+
+    # Regular users can only see companies they're associated with
+    companies = (
+        db.query(CompanyDB)
+        .join(UserCompanyAssociation)
+        .filter(UserCompanyAssociation.user_id == current_user.id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     return companies
 
 
 @app.get("/companies/{company_id}", response_model=CompanyResponse)
+@authorize_company_access(required_roles=list(UserRole))
 async def get_company_detail(
+    request: Request,
     company_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -1740,9 +1871,11 @@ async def get_company_detail(
 @app.post(
     "/companies/{company_id}/users", response_model=UserCompanyAssociationResponse
 )
+@authorize_company_access(required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD])
 async def add_user_to_company(
+    request: Request,
     company_id: str,
-    request: AddUserToCompanyRequest,
+    request_body: AddUserToCompanyRequest,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
@@ -1761,7 +1894,7 @@ async def add_user_to_company(
         raise HTTPException(status_code=404, detail="Company not found")
 
     # Check if the user exists
-    user = db.query(UserDB).filter(UserDB.id == request.user_id).first()
+    user = db.query(UserDB).filter(UserDB.id == request_body.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -1769,7 +1902,7 @@ async def add_user_to_company(
     existing_association = (
         db.query(UserCompanyAssociation)
         .filter(
-            UserCompanyAssociation.user_id == request.user_id,
+            UserCompanyAssociation.user_id == request_body.user_id,
             UserCompanyAssociation.company_id == company_id,
         )
         .first()
@@ -1782,7 +1915,7 @@ async def add_user_to_company(
 
     # Create new association
     association = UserCompanyAssociation(
-        user_id=request.user_id, company_id=company_id, role=request.role
+        user_id=request_body.user_id, company_id=company_id, role=request_body.role
     )
     db.add(association)
     db.commit()
@@ -1792,7 +1925,9 @@ async def add_user_to_company(
 
 
 @app.delete("/companies/{company_id}/users/{user_id}", status_code=204)
+@authorize_company_access(required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD])
 async def remove_user_from_company(
+    request: Request,
     company_id: str,
     user_id: str,
     db: Session = Depends(get_db),
@@ -1855,19 +1990,27 @@ async def remove_user_from_company(
 
 
 @app.get("/companies/{company_id}/users", response_model=List[CompanyUserResponse])
+@authorize_company_access(required_roles=list(UserRole))
 async def list_company_users(
+    request: Request,
     company_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    # Check if user has access to the company
-    if not current_user.has_company_role(
-        company_id,
-        [UserRole.ORGANISATION_LEAD, UserRole.ORGANISATION_USER, UserRole.AUDITOR],
-    ):
-        raise HTTPException(
-            status_code=403, detail="Insufficient permissions to view company users"
+    if not current_user.is_global_administrator:
+        # Verify user has access to this company
+        user_association = (
+            db.query(UserCompanyAssociation)
+            .filter(
+                UserCompanyAssociation.user_id == current_user.id,
+                UserCompanyAssociation.company_id == company_id,
+            )
+            .first()
         )
+        if not user_association:
+            raise HTTPException(
+                status_code=403, detail="You don't have access to this company's users"
+            )
 
     # Get all users associated with the company
     users_with_roles = (
@@ -1889,13 +2032,38 @@ async def list_company_users(
     ]
 
 
+@app.get("/users/me", response_model=UserResponse)
+async def get_current_user_details(
+    current_user: UserDB = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    Get details about the currently authenticated user, including their company associations
+    """
+    # Fetch the user with company associations
+    user_with_associations = (
+        db.query(UserDB)
+        .options(
+            joinedload(UserDB.company_associations).joinedload(
+                UserCompanyAssociation.company
+            )
+        )
+        .filter(UserDB.id == current_user.id)
+        .first()
+    )
+
+    if not user_with_associations:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return user_with_associations
+
+
 @app.get("/users/me/companies", response_model=List[CompanyListResponse])
 async def list_user_companies(
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get all companies the current user has access to"""
-    if current_user.is_system_auditor:
+    if current_user.is_global_administrator:
         # System auditors can see all companies
         companies = db.query(CompanyDB).all()
     else:
@@ -1914,7 +2082,9 @@ async def list_user_companies(
     "/companies/{company_id}/users/{user_id}/role",
     response_model=UserCompanyAssociationResponse,
 )
+@authorize_company_access(required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD])
 async def update_user_role(
+    request: Request,
     company_id: str,
     user_id: str,
     role: UserRole,
@@ -1977,7 +2147,9 @@ async def update_user_role(
 
 
 @app.get("/audits/{audit_id}/company", response_model=CompanyResponse)
+@authorize_company_access(required_roles=list(UserRole))
 async def get_company(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -1994,17 +2166,29 @@ async def get_company(
 
 
 @app.get("/companies/{company_id}/audits", response_model=List[AuditListResponse])
+@authorize_company_access(required_roles=list(UserRole))
 async def list_company_audits(
+    request: Request,
     company_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
 ):
-    # First, check if the company exists
-    company = db.query(CompanyDB).filter(CompanyDB.id == company_id).first()
-    if company is None:
-        raise HTTPException(status_code=404, detail="Company not found")
+    if not current_user.is_global_administrator:
+        # Verify user has access to this company
+        user_association = (
+            db.query(UserCompanyAssociation)
+            .filter(
+                UserCompanyAssociation.user_id == current_user.id,
+                UserCompanyAssociation.company_id == company_id,
+            )
+            .first()
+        )
+        if not user_association:
+            raise HTTPException(
+                status_code=403, detail="You don't have access to this company's audits"
+            )
 
     # Query audits associated with the company
     audits = (
@@ -2020,7 +2204,12 @@ async def list_company_audits(
 
 
 @app.put("/audits/{audit_id}/company", response_model=CompanyResponse)
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
 async def update_company(
+    request: Request,
     audit_id: str,
     company: CompanyCreate,
     db: Session = Depends(get_db),
@@ -2049,7 +2238,9 @@ async def update_company(
 @app.post(
     "/audits/{audit_id}/company/actions/parse-evidence", response_model=CompanyResponse
 )
+@authorize_company_access(required_roles=[UserRole.AUDITOR])
 async def parse_evidence_for_company(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -2241,7 +2432,16 @@ def process_raw_evidence(db_company: CompanyDB, db: Session) -> CompanyResponse:
 
 
 @app.post("/audits/{audit_id}/evidence-files", response_model=EvidenceFileResponse)
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[
+        UserRole.ORGANISATION_USER,
+        UserRole.ORGANISATION_LEAD,
+        UserRole.AUDITOR,
+    ],
+)
 async def upload_evidence_file(
+    request: Request,
     audit_id: str,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -2329,7 +2529,9 @@ async def upload_evidence_file(
 
 
 @app.get("/audits/{audit_id}/evidence-files", response_model=List[EvidenceFileResponse])
+@authorize_company_access(required_roles=list(UserRole))
 async def list_evidence_files(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -2341,7 +2543,9 @@ async def list_evidence_files(
 @app.get(
     "/audits/{audit_id}/evidence-files/{file_id}", response_model=EvidenceFileResponse
 )
+@authorize_company_access(required_roles=list(UserRole))
 async def get_evidence_file(
+    request: Request,
     audit_id: str,
     file_id: str,
     db: Session = Depends(get_db),
@@ -2358,7 +2562,9 @@ async def get_evidence_file(
 
 
 @app.get("/audits/{audit_id}/evidence-files/{file_id}/content")
+@authorize_company_access(required_roles=list(UserRole))
 async def get_evidence_file_content(
+    request: Request,
     audit_id: str,
     file_id: str,
     db: Session = Depends(get_db),
@@ -2382,7 +2588,12 @@ async def get_evidence_file_content(
     "/audits/{audit_id}/evidence-files/{file_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
 async def delete_evidence_file(
+    request: Request,
     audit_id: str,
     file_id: str,
     db: Session = Depends(get_db),
@@ -2411,7 +2622,9 @@ async def delete_evidence_file(
     "/audits/{audit_id}/evidence-files/{file_id}/status",
     response_model=EvidenceFileResponse,
 )
+@authorize_company_access(required_roles=list(UserRole))
 async def check_evidence_file_status(
+    request: Request,
     audit_id: str,
     file_id: str,
     db: Session = Depends(get_db),
@@ -2429,6 +2642,7 @@ async def check_evidence_file_status(
 
 @app.get("/criteria", response_model=List[CriteriaResponse])
 async def list_base_criteria(
+    request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
@@ -2445,7 +2659,9 @@ async def list_base_criteria(
 
 
 @app.get("/criteria/custom", response_model=List[CriteriaResponse])
+@authorize_company_access(required_roles=[UserRole.AUDITOR])
 async def list_custom_criteria(
+    request: Request,
     audit_id: Optional[str] = Query(
         None, description="Filter criteria by specific audit"
     ),
@@ -2456,6 +2672,15 @@ async def list_custom_criteria(
 ):
     query = db.query(CriteriaDB).filter(CriteriaDB.is_specific_to_audit != None)
 
+    if not current_user.is_global_administrator:
+        # Filter by audits the user has access to
+        query = (
+            query.join(AuditDB)
+            .join(CompanyDB)
+            .join(UserCompanyAssociation)
+            .filter(UserCompanyAssociation.user_id == current_user.id)
+        )
+
     if audit_id:
         query = query.filter(CriteriaDB.is_specific_to_audit == audit_id)
 
@@ -2464,7 +2689,9 @@ async def list_custom_criteria(
 
 
 @app.get("/audits/{audit_id}/criteria", response_model=List[CriteriaResponse])
+@authorize_company_access(required_roles=list(UserRole))
 async def get_audit_criteria(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -2479,7 +2706,12 @@ async def get_audit_criteria(
 
 
 @app.post("/audits/{audit_id}/criteria/custom", response_model=CriteriaResponse)
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
 async def add_custom_criteria(
+    request: Request,
     audit_id: str,
     criteria: CriteriaCreate,
     db: Session = Depends(get_db),
@@ -2517,7 +2749,9 @@ async def add_custom_criteria(
 
 
 @app.put("/criteria/custom/{criteria_id}", response_model=CriteriaResponse)
+@authorize_company_access(required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD])
 async def update_custom_criteria(
+    request: Request,
     criteria_id: str,
     update_data: UpdateCustomCriteriaRequest,
     db: Session = Depends(get_db),
@@ -2548,7 +2782,9 @@ async def update_custom_criteria(
 @app.delete(
     "/criteria/custom/{criteria_id}", response_model=DeleteCustomCriteriaResponse
 )
+@authorize_company_access(required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD])
 async def delete_custom_criteria(
+    request: Request,
     criteria_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -2584,7 +2820,12 @@ async def delete_custom_criteria(
 @app.post(
     "/audits/{audit_id}/criteria/selected", response_model=CriteriaSelectionResponse
 )
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
 async def select_criteria(
+    request: Request,
     audit_id: str,
     criteria_select: CriteriaSelect,
     db: Session = Depends(get_db),
@@ -2637,7 +2878,12 @@ async def select_criteria(
 @app.delete(
     "/audits/{audit_id}/criteria/selected", response_model=RemoveCriteriaResponse
 )
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
 async def remove_selected_criteria(
+    request: Request,
     audit_id: str,
     criteria_remove: RemoveCriteriaRequest,
     db: Session = Depends(get_db),
@@ -2678,7 +2924,9 @@ async def remove_selected_criteria(
     "/audits/{audit_id}/criteria/selected/actions/preselect",
     response_model=List[CriteriaSelectionResponse],
 )
+@authorize_company_access(required_roles=[UserRole.AUDITOR])
 async def preselect_criteria(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -2703,7 +2951,9 @@ async def preselect_criteria(
     "/audits/{audit_id}/criteria/{criteria_id}/actions/extract-evidence",
     status_code=status.HTTP_202_ACCEPTED,
 )
+@authorize_company_access(required_roles=[UserRole.AUDITOR])
 async def extract_evidence_for_criteria(
+    request: Request,
     audit_id: str,
     criteria_id: str,
     background_tasks: BackgroundTasks,
@@ -2926,7 +3176,9 @@ def extract_evidence_from_text(
     "/audits/{audit_id}/criteria/{criteria_id}/evidence",
     response_model=CriteriaEvidenceResponse,
 )
+@authorize_company_access(required_roles=list(UserRole))
 async def get_evidence_for_criteria(
+    request: Request,
     audit_id: str,
     criteria_id: str,
     db: Session = Depends(get_db),
@@ -2974,7 +3226,12 @@ async def get_evidence_for_criteria(
     "/audits/{audit_id}/criteria/{criteria_id}/questions",
     response_model=List[QuestionResponse],
 )
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
 async def generate_questions(
+    request: Request,
     audit_id: str,
     criteria_id: str,
     db: Session = Depends(get_db),
@@ -3116,7 +3373,9 @@ def generate_questions_using_llm(
 @app.get(
     "/audits/{audit_id}/questions/unanswered", response_model=List[QuestionResponse]
 )
+@authorize_company_access(required_roles=list(UserRole))
 async def get_unanswered_questions(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -3131,7 +3390,9 @@ async def get_unanswered_questions(
 
 
 @app.get("/audits/{audit_id}/questions/{question_id}", response_model=QuestionResponse)
+@authorize_company_access(required_roles=list(UserRole))
 async def get_question_details(
+    request: Request,
     audit_id: str,
     question_id: str,
     db: Session = Depends(get_db),
@@ -3152,7 +3413,12 @@ async def get_question_details(
 @app.post(
     "/audits/{audit_id}/questions/{question_id}/answers", response_model=AnswerResponse
 )
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.ORGANISATION_USER, UserRole.ORGANISATION_LEAD],
+)
 async def submit_answer(
+    request: Request,
     audit_id: str,
     question_id: str,
     answer: AnswerCreate,
@@ -3179,7 +3445,9 @@ async def submit_answer(
 
 
 @app.get("/audits/{audit_id}/questions", response_model=List[QuestionResponse])
+@authorize_company_access(required_roles=list(UserRole))
 async def get_all_questions(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -3197,7 +3465,9 @@ async def get_all_questions(
     "/audits/{audit_id}/questions/{question_id}/answers",
     response_model=List[AnswerResponse],
 )
+@authorize_company_access(required_roles=list(UserRole))
 async def get_answers_for_question(
+    request: Request,
     audit_id: str,
     question_id: str,
     db: Session = Depends(get_db),
@@ -3220,7 +3490,9 @@ async def get_answers_for_question(
     "/audits/{audit_id}/questions/{question_id}/answers/{answer_id}",
     response_model=AnswerResponse,
 )
+@authorize_company_access(required_roles=list(UserRole))
 async def get_answer_details(
+    request: Request,
     audit_id: str,
     question_id: str,
     answer_id: str,
@@ -3245,7 +3517,9 @@ async def get_answer_details(
     "/audits/{audit_id}/criteria/{criteria_id}/maturity",
     response_model=MaturityAssessmentResponse,
 )
+@authorize_company_access(required_roles=list(UserRole))
 async def get_maturity_assessment(
+    request: Request,
     audit_id: str,
     criteria_id: str,
     db: Session = Depends(get_db),
@@ -3270,7 +3544,9 @@ async def get_maturity_assessment(
     "/audits/{audit_id}/criteria/{criteria_id}/maturity",
     response_model=MaturityAssessmentResponse,
 )
+@authorize_company_access(required_roles=[UserRole.AUDITOR])
 async def set_maturity_assessment(
+    request: Request,
     audit_id: str,
     criteria_id: str,
     assessment: MaturityAssessmentCreate,
@@ -3321,7 +3597,9 @@ async def set_maturity_assessment(
 @app.get(
     "/audits/{audit_id}/assessments", response_model=List[MaturityAssessmentResponse]
 )
+@authorize_company_access(required_roles=list(UserRole))
 async def get_all_maturity_assessments(
+    request: Request,
     audit_id: str,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
