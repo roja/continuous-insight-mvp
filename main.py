@@ -118,6 +118,8 @@ from sqlalchemy import (
     DateTime,
     func,
     and_,
+    UniqueConstraint,
+    CheckConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.mutable import MutableList
@@ -191,6 +193,14 @@ Base = declarative_base()
 
 
 # SQLAlchemy models
+class UserRole(str, Enum):
+    AUDITOR = "auditor"
+    ORGANISATION_LEAD = "organisation_lead"
+    ORGANISATION_USER = "organisation_user"
+    DELEGATED_USER = "delegated_user"
+    OBSERVER_LEAD = "observer_lead"
+
+
 class UserDB(Base):
     __tablename__ = "users"
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
@@ -198,7 +208,58 @@ class UserDB(Base):
     name = Column(String)
     oauth_provider = Column(String)  # 'google' or 'apple'
     oauth_id = Column(String, unique=True)
-    role = Column(String)
+    is_system_auditor = Column(
+        Boolean, default=False
+    )  # Flag for system-wide auditor access
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    company_associations = relationship("UserCompanyAssociation", back_populates="user")
+    companies = relationship("CompanyDB", secondary="user_company_associations")
+
+    @property
+    def company_roles(self) -> Dict[str, UserRole]:
+        """Returns a mapping of company_id to role"""
+        return {
+            assoc.company_id: UserRole(assoc.role)
+            for assoc in self.company_associations
+        }
+
+    @property
+    def accessible_companies(self) -> List[str]:
+        """Returns list of company IDs the user has access to"""
+        return [assoc.company_id for assoc in self.company_associations]
+
+    def has_company_role(self, company_id: str, required_roles: List[UserRole]) -> bool:
+        """Check if user has any of the required roles for a company"""
+        if self.is_system_auditor:
+            return True
+
+        for assoc in self.company_associations:
+            if assoc.company_id == company_id:
+                return UserRole(assoc.role) in required_roles
+        return False
+
+
+class UserCompanyAssociation(Base):
+    __tablename__ = "user_company_associations"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"))
+    company_id = Column(String, ForeignKey("companies.id", ondelete="CASCADE"))
+    role = Column(String, nullable=False)  # Uses UserRole enum values
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    user = relationship("UserDB", back_populates="company_associations")
+    company = relationship("CompanyDB", back_populates="user_associations")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "company_id", name="uq_user_company"),
+        CheckConstraint(role.in_([r.value for r in UserRole]), name="valid_role"),
+    )
 
 
 class AuditDB(Base):
@@ -329,6 +390,8 @@ class CompanyDB(Base):
     processed_file_ids = Column(MutableList.as_mutable(JSON), default=[])
 
     audits = relationship("AuditDB", back_populates="company")
+    user_associations = relationship("UserCompanyAssociation", back_populates="company")
+    users = relationship("UserDB", secondary="user_company_associations")
 
 
 class EvidenceFileDB(Base):
@@ -847,10 +910,53 @@ class MaturityAssessmentDB(Base):
 
 
 # Pydantic models
+class CompanyUserResponse(BaseModel):
+    id: str
+    email: str
+    name: str
+    role: UserRole
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AddUserToCompanyRequest(BaseModel):
+    user_id: str
+    role: UserRole
+
+
 class MaturityLevel(str, Enum):
     novice = "novice"
     intermediate = "intermediate"
     advanced = "advanced"
+
+
+class UserCompanyAssociationCreate(BaseModel):
+    company_id: str
+    role: UserRole
+
+
+class UserCompanyAssociationResponse(BaseModel):
+    id: str
+    company_id: str
+    user_id: str
+    role: UserRole
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    name: str
+    is_system_auditor: bool
+    company_associations: List[UserCompanyAssociationResponse]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AuditResponse(BaseModel):
@@ -1092,14 +1198,6 @@ def get_db():
 
 
 # Authentication
-# API_KEY_NAME = "X-API-Key"
-# api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
-
-
-# async def get_api_key(api_key_header: str = Depends(api_key_header)):
-#     if api_key_header == settings.api_key:
-#         return api_key_header
-#     raise HTTPException(status_code=403, detail="Could not validate credentials")
 async def get_current_user(
     auth: HTTPAuthorizationCredentials = Depends(auth_scheme),
     db: Session = Depends(get_db),
@@ -1637,6 +1735,245 @@ async def get_company_detail(
     if company is None:
         raise HTTPException(status_code=404, detail="Company not found")
     return company
+
+
+@app.post(
+    "/companies/{company_id}/users", response_model=UserCompanyAssociationResponse
+)
+async def add_user_to_company(
+    company_id: str,
+    request: AddUserToCompanyRequest,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    # Check if current user has permission to manage users
+    if not current_user.has_company_role(
+        company_id, [UserRole.ORGANISATION_LEAD, UserRole.AUDITOR]
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization leads and auditors can manage users",
+        )
+
+    # Check if the company exists
+    company = db.query(CompanyDB).filter(CompanyDB.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    # Check if the user exists
+    user = db.query(UserDB).filter(UserDB.id == request.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if association already exists
+    existing_association = (
+        db.query(UserCompanyAssociation)
+        .filter(
+            UserCompanyAssociation.user_id == request.user_id,
+            UserCompanyAssociation.company_id == company_id,
+        )
+        .first()
+    )
+
+    if existing_association:
+        raise HTTPException(
+            status_code=400, detail="User is already associated with this company"
+        )
+
+    # Create new association
+    association = UserCompanyAssociation(
+        user_id=request.user_id, company_id=company_id, role=request.role
+    )
+    db.add(association)
+    db.commit()
+    db.refresh(association)
+
+    return association
+
+
+@app.delete("/companies/{company_id}/users/{user_id}", status_code=204)
+async def remove_user_from_company(
+    company_id: str,
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    # Check if current user has permission to manage users
+    if not current_user.has_company_role(
+        company_id, [UserRole.ORGANISATION_LEAD, UserRole.AUDITOR]
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization leads and auditors can manage users",
+        )
+
+    # Prevent removing the last organization lead
+    if user_id != current_user.id:
+        association = (
+            db.query(UserCompanyAssociation)
+            .filter(
+                UserCompanyAssociation.company_id == company_id,
+                UserCompanyAssociation.user_id == user_id,
+            )
+            .first()
+        )
+
+        if association and association.role == UserRole.ORGANISATION_LEAD:
+            # Count remaining org leads
+            remaining_leads = (
+                db.query(UserCompanyAssociation)
+                .filter(
+                    UserCompanyAssociation.company_id == company_id,
+                    UserCompanyAssociation.role == UserRole.ORGANISATION_LEAD,
+                    UserCompanyAssociation.user_id != user_id,
+                )
+                .count()
+            )
+
+            if remaining_leads == 0:
+                raise HTTPException(
+                    status_code=400, detail="Cannot remove the last organization lead"
+                )
+
+    # Remove the association
+    result = (
+        db.query(UserCompanyAssociation)
+        .filter(
+            UserCompanyAssociation.user_id == user_id,
+            UserCompanyAssociation.company_id == company_id,
+        )
+        .delete()
+    )
+
+    if result == 0:
+        raise HTTPException(
+            status_code=404, detail="User is not associated with this company"
+        )
+
+    db.commit()
+    return Response(status_code=204)
+
+
+@app.get("/companies/{company_id}/users", response_model=List[CompanyUserResponse])
+async def list_company_users(
+    company_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    # Check if user has access to the company
+    if not current_user.has_company_role(
+        company_id,
+        [UserRole.ORGANISATION_LEAD, UserRole.ORGANISATION_USER, UserRole.AUDITOR],
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions to view company users"
+        )
+
+    # Get all users associated with the company
+    users_with_roles = (
+        db.query(UserDB, UserCompanyAssociation.role)
+        .join(UserCompanyAssociation)
+        .filter(UserCompanyAssociation.company_id == company_id)
+        .all()
+    )
+
+    return [
+        CompanyUserResponse(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            role=role,
+            created_at=user.created_at,
+        )
+        for user, role in users_with_roles
+    ]
+
+
+@app.get("/users/me/companies", response_model=List[CompanyListResponse])
+async def list_user_companies(
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    """Get all companies the current user has access to"""
+    if current_user.is_system_auditor:
+        # System auditors can see all companies
+        companies = db.query(CompanyDB).all()
+    else:
+        # Get companies through associations
+        companies = (
+            db.query(CompanyDB)
+            .join(UserCompanyAssociation)
+            .filter(UserCompanyAssociation.user_id == current_user.id)
+            .all()
+        )
+
+    return companies
+
+
+@app.put(
+    "/companies/{company_id}/users/{user_id}/role",
+    response_model=UserCompanyAssociationResponse,
+)
+async def update_user_role(
+    company_id: str,
+    user_id: str,
+    role: UserRole,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    """Update a user's role in a company"""
+    # Check if current user has permission to manage users
+    if not current_user.has_company_role(
+        company_id, [UserRole.ORGANISATION_LEAD, UserRole.AUDITOR]
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization leads and auditors can manage user roles",
+        )
+
+    # Get the association
+    association = (
+        db.query(UserCompanyAssociation)
+        .filter(
+            UserCompanyAssociation.user_id == user_id,
+            UserCompanyAssociation.company_id == company_id,
+        )
+        .first()
+    )
+
+    if not association:
+        raise HTTPException(
+            status_code=404, detail="User is not associated with this company"
+        )
+
+    # Prevent removing the last organization lead
+    if (
+        association.role == UserRole.ORGANISATION_LEAD
+        and role != UserRole.ORGANISATION_LEAD
+    ):
+        remaining_leads = (
+            db.query(UserCompanyAssociation)
+            .filter(
+                UserCompanyAssociation.company_id == company_id,
+                UserCompanyAssociation.role == UserRole.ORGANISATION_LEAD,
+                UserCompanyAssociation.user_id != user_id,
+            )
+            .count()
+        )
+
+        if remaining_leads == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot change role of the last organization lead",
+            )
+
+    # Update the role
+    association.role = role
+    association.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(association)
+
+    return association
 
 
 @app.get("/audits/{audit_id}/company", response_model=CompanyResponse)
