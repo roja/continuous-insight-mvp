@@ -1,16 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 from typing import List
 
 from database import get_db
-from db_models import (
-    UserDB,
-    UserRole,
-    AuditDB,
-    CompanyDB,
-    EvidenceFileDB,
-    CriteriaDB,
-    UserCompanyAssociation
+from db_models import UserDB, UserRole, AuditDB, CompanyDB, EvidenceFileDB, CriteriaDB
+from helpers import (
+    verify_company_access,
+    verify_audit_access,
+    get_or_404,
+    paginate_query,
+    filter_by_user_company_access,
 )
 from auth import get_current_user, authorize_company_access
 from pydantic_models import (
@@ -33,10 +32,8 @@ def create_audit(
     Create a new audit with either an existing company or a new company
     """
     if audit.company_id:
-        # Use existing company
-        company = db.query(CompanyDB).filter(CompanyDB.id == audit.company_id).first()
-        if not company:
-            raise HTTPException(status_code=404, detail="Company not found")
+        # Use existing company and verify access
+        company = verify_company_access(db, audit.company_id, current_user)
     elif audit.company_name:
         # Create new company
         company = CompanyDB()
@@ -59,7 +56,6 @@ def create_audit(
     return db_audit
 
 @router.get("/audits/{audit_id}", response_model=AuditResponse)
-@authorize_company_access(required_roles=list(UserRole))
 async def get_audit(
     request: Request,
     audit_id: str,
@@ -69,16 +65,9 @@ async def get_audit(
     """
     Get details of a specific audit
     """
-    db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if db_audit is None:
-        raise HTTPException(status_code=404, detail="Audit not found")
-    return db_audit
+    return verify_audit_access(db, audit_id, current_user)
 
 @router.delete("/audits/{audit_id}", status_code=status.HTTP_204_NO_CONTENT)
-@authorize_company_access(
-    audit_id_param="audit_id",
-    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
-)
 async def delete_audit(
     request: Request,
     audit_id: str,
@@ -88,9 +77,8 @@ async def delete_audit(
     """
     Delete an audit and all its related data
     """
-    db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if db_audit is None:
-        raise HTTPException(status_code=404, detail="Audit not found")
+    required_roles = [UserRole.AUDITOR, UserRole.ORGANISATION_LEAD]
+    db_audit = verify_audit_access(db, audit_id, current_user, required_roles)
 
     # Delete related evidence files
     db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id).delete()
@@ -115,18 +103,6 @@ async def list_audits(
     """
     List all audits accessible to the current user
     """
-    if current_user.is_global_administrator:
-        audits = db.query(AuditDB).offset(skip).limit(limit).all()
-        return audits
-
-    # Get audits for companies the user has access to
-    audits = (
-        db.query(AuditDB)
-        .join(CompanyDB)
-        .join(UserCompanyAssociation)
-        .filter(UserCompanyAssociation.user_id == current_user.id)
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-    return audits
+    query = db.query(AuditDB)
+    query = filter_by_user_company_access(query, current_user)
+    return paginate_query(query, skip, limit).all()
