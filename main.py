@@ -1673,7 +1673,18 @@ async def auth_google(auth_request: GoogleAuthRequest, db: Session = Depends(get
 
         # Create JWT token
         access_token = create_jwt_token({"sub": user.id})
-        return {"access_token": access_token, "token_type": "bearer"}
+        
+        # Return both token and user info
+        return {
+            "access_token": access_token, 
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "is_global_administrator": user.is_global_administrator
+            }
+        }
 
     except ValueError as e:
         print(f"Error in auth_google: {str(e)}")
