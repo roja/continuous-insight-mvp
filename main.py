@@ -1675,7 +1675,7 @@ async def auth_google(auth_request: GoogleAuthRequest, db: Session = Depends(get
         # Create JWT token
         access_token = create_jwt_token({"sub": user.id})
         
-        # Return both token and user info
+        # Return token, user info and company associations
         return {
             "access_token": access_token, 
             "token_type": "bearer",
@@ -1683,7 +1683,17 @@ async def auth_google(auth_request: GoogleAuthRequest, db: Session = Depends(get
                 "id": user.id,
                 "email": user.email,
                 "name": user.name,
-                "is_global_administrator": user.is_global_administrator
+                "is_global_administrator": user.is_global_administrator,
+                "company_associations": [
+                    {
+                        "id": assoc.id,
+                        "company_id": assoc.company_id,
+                        "user_id": assoc.user_id,
+                        "role": assoc.role,
+                        "created_at": assoc.created_at,
+                        "updated_at": assoc.updated_at
+                    } for assoc in user.company_associations
+                ]
             }
         }
 
