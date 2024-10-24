@@ -22,7 +22,7 @@ from pydantic_models import (
 router = APIRouter(tags=["audits"])
 
 @router.post("/audits", response_model=AuditResponse)
-@authorize_company_access(required_roles=list(UserRole))
+@authorize_company_access(required_roles=[UserRole.AUDITOR])
 def create_audit(
     request: Request,
     audit: AuditCreate,
@@ -30,25 +30,26 @@ def create_audit(
     current_user: UserDB = Depends(get_current_user),
 ):
     """
-    Create a new audit with either an existing company or a new company
+    Create a new audit for an existing company. Requires AUDITOR role or global admin.
     """
-    if audit.company_id:
-        # Use existing company and verify access
-        company = verify_company_access(db, audit.company_id, current_user)
-    elif audit.company_name:
-        # Create new company
-        company = CompanyDB()
-        company.name = audit.company_name
-        db.add(company)
-        db.flush()  # This assigns an ID to the company without committing the transaction
-    else:
+    if not audit.company_id or not audit.name or not audit.description:
         raise HTTPException(
             status_code=400,
-            detail="Either company_id or company details must be provided",
+            detail="company_id, name, and description are required"
         )
 
+    # Verify company exists and user has access
+    company = verify_company_access(
+        db, 
+        audit.company_id, 
+        current_user, 
+        [UserRole.AUDITOR]
+    )
+
     db_audit = AuditDB(
-        name=audit.name, description=audit.description, company_id=company.id
+        name=audit.name,
+        description=audit.description,
+        company_id=audit.company_id
     )
     db.add(db_audit)
     db.commit()
