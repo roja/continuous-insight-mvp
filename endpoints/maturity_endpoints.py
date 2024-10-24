@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime, timezone
@@ -14,6 +14,12 @@ from auth import get_current_user, authorize_company_access
 from pydantic_models import (
     MaturityAssessmentCreate,
     MaturityAssessmentResponse,
+)
+from helpers import (
+    verify_audit_access,
+    get_or_404,
+    paginate_query,
+    filter_by_user_company_access,
 )
 
 router = APIRouter(tags=["maturity assessments"])
@@ -31,16 +37,22 @@ async def get_maturity_assessment(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get maturity assessment for specific criteria in an audit"""
-    assessment = (
-        db.query(MaturityAssessmentDB)
-        .filter(
-            MaturityAssessmentDB.audit_id == audit_id,
-            MaturityAssessmentDB.criteria_id == criteria_id,
-        )
-        .first()
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Verify criteria exists
+    criteria = get_or_404(db, CriteriaDB, criteria_id, "Criteria not found")
+    
+    # Get assessment or 404
+    assessment = get_or_404(
+        db,
+        MaturityAssessmentDB,
+        criteria_id,
+        "Maturity assessment not found",
     )
-
-    if not assessment:
+    
+    # Verify assessment belongs to audit
+    if assessment.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Maturity assessment not found")
 
     return assessment
@@ -59,14 +71,15 @@ async def set_maturity_assessment(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Create or update maturity assessment for specific criteria"""
-    # Check if the audit and criteria exist
-    criteria = (
-        db.query(CriteriaDB)
-        .filter(CriteriaDB.id == criteria_id, CriteriaDB.audit_id == audit_id)
-        .first()
-    )
-    if not criteria:
-        raise HTTPException(status_code=404, detail="Audit or Criteria not found")
+    # Verify audit access with required role
+    audit = verify_audit_access(db, audit_id, current_user, [UserRole.AUDITOR])
+    
+    # Verify criteria exists
+    criteria = get_or_404(db, CriteriaDB, criteria_id, "Criteria not found")
+    
+    # Verify criteria belongs to audit
+    if criteria.audit_id != audit_id:
+        raise HTTPException(status_code=404, detail="Criteria not found for this audit")
 
     # Check if an assessment already exists
     existing_assessment = (
@@ -107,14 +120,19 @@ async def set_maturity_assessment(
 async def get_all_maturity_assessments(
     request: Request,
     audit_id: str,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    """Get all maturity assessments for an audit"""
-    assessments = (
-        db.query(MaturityAssessmentDB)
-        .filter(MaturityAssessmentDB.audit_id == audit_id)
-        .all()
-    )
-
+    """Get all maturity assessments for an audit with pagination"""
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Build base query
+    query = db.query(MaturityAssessmentDB).filter(MaturityAssessmentDB.audit_id == audit_id)
+    
+    # Apply pagination
+    assessments = paginate_query(query, skip, limit).all()
+    
     return assessments
