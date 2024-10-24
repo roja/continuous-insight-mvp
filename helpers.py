@@ -425,9 +425,14 @@ def filter_by_user_company_access(query: Any, user: UserDB, company_join_path=No
 
     if company_join_path:
         query = query.join(company_join_path)
+        return (
+            query.join(UserCompanyAssociation, 
+                      UserCompanyAssociation.company_id == CompanyDB.id)
+            .filter(UserCompanyAssociation.user_id == user.id)
+        )
 
     return (
-        query.join(CompanyDB)
-        .join(UserCompanyAssociation)
+        query.join(UserCompanyAssociation, 
+                  UserCompanyAssociation.company_id == query.primary_entity.class_.id)
         .filter(UserCompanyAssociation.user_id == user.id)
     )

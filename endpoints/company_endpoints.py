@@ -168,7 +168,7 @@ async def list_companies(
     current_user: UserDB = Depends(get_current_user),
 ):
     """List all companies accessible to the current user"""
-    query = db.query(CompanyDB)
+    query = db.query(CompanyDB).select_from(CompanyDB)
     query = filter_by_user_company_access(query, current_user)
     return paginate_query(query, skip, limit).all()
 
