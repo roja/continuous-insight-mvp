@@ -37,7 +37,14 @@ from pydantic_models import (
     QuestionResponse,
     AnswerResponse,
 )
-from helpers import process_evidence_for_criteria
+from helpers import (
+    process_evidence_for_criteria,
+    verify_company_access,
+    verify_audit_access,
+    get_or_404,
+    paginate_query,
+    filter_by_user_company_access,
+)
 
 router = APIRouter(tags=["criteria"])
 
@@ -51,14 +58,8 @@ async def list_base_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """List all base criteria"""
-    base_criteria = (
-        db.query(CriteriaDB)
-        .filter(CriteriaDB.is_specific_to_audit == None)
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-    return base_criteria
+    query = db.query(CriteriaDB).filter(CriteriaDB.is_specific_to_audit == None)
+    return paginate_query(query, skip, limit)
 
 
 @router.get("/criteria/custom", response_model=List[CriteriaResponse])
@@ -101,6 +102,9 @@ async def get_audit_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get all criteria associated with an audit"""
+    audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
+    verify_audit_access(db, audit_id, current_user)
+    
     audit_criteria = (
         db.query(AuditCriteriaDB)
         .filter(AuditCriteriaDB.audit_id == audit_id)
@@ -123,10 +127,7 @@ async def add_custom_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Add custom criteria to an audit"""
-    # Verify the audit exists
-    audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if not audit:
-        raise HTTPException(status_code=404, detail="Audit not found")
+    audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
 
     # Create custom criteria
     db_criteria = CriteriaDB(
@@ -164,9 +165,7 @@ async def update_custom_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Update custom criteria"""
-    criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
-    if not criteria:
-        raise HTTPException(status_code=404, detail="Criteria not found")
+    criteria = get_or_404(db, CriteriaDB, criteria_id, "Criteria not found")
     if criteria.is_specific_to_audit is None:
         raise HTTPException(status_code=400, detail="Cannot update base criteria")
 
@@ -194,9 +193,7 @@ async def delete_custom_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Delete custom criteria"""
-    criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
-    if not criteria:
-        raise HTTPException(status_code=404, detail="Criteria not found")
+    criteria = get_or_404(db, CriteriaDB, criteria_id, "Criteria not found")
     if criteria.is_specific_to_audit is None:  # This was reversed in the original
         raise HTTPException(status_code=400, detail="Cannot delete base criteria")
 
@@ -234,17 +231,8 @@ async def select_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Select criteria for an audit"""
-    audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if not audit:
-        raise HTTPException(status_code=404, detail="Audit not found")
-
-    criteria = (
-        db.query(CriteriaDB)
-        .filter(CriteriaDB.id == criteria_select.criteria_id)
-        .first()
-    )
-    if not criteria:
-        raise HTTPException(status_code=404, detail="Criterion not found")
+    audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
+    criteria = get_or_404(db, CriteriaDB, criteria_select.criteria_id, "Criterion not found")
 
     existing_association = (
         db.query(AuditCriteriaDB)
@@ -288,9 +276,7 @@ async def remove_selected_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Remove selected criteria from an audit"""
-    audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if not audit:
-        raise HTTPException(status_code=404, detail="Audit not found")
+    audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
 
     existing_association = (
         db.query(AuditCriteriaDB)
@@ -354,9 +340,7 @@ async def extract_evidence_for_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Extract evidence for specific criteria"""
-    criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
-    if not criteria:
-        raise HTTPException(status_code=404, detail="Criteria not found")
+    criteria = get_or_404(db, CriteriaDB, criteria_id, "Criteria not found")
 
     background_tasks.add_task(process_evidence_for_criteria, audit_id, criteria_id)
 
