@@ -36,15 +36,11 @@ async def generate_questions(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Generate questions for specific criteria based on evidence"""
-    # Check if the audit exists
-    audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if not audit:
-        raise HTTPException(status_code=404, detail="Audit not found")
-
-    # Check if the criteria exists
-    criteria = db.query(CriteriaDB).filter(CriteriaDB.id == criteria_id).first()
-    if not criteria:
-        raise HTTPException(status_code=404, detail="Criteria not found")
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user, [UserRole.AUDITOR, UserRole.ORGANISATION_LEAD])
+    
+    # Get criteria or 404
+    criteria = get_or_404(db, CriteriaDB, criteria_id, "Criteria not found")
 
     # Fetch all evidence for this criteria and audit
     evidence_entries = (
@@ -91,12 +87,15 @@ async def get_unanswered_questions(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get all unanswered questions for an audit"""
-    questions = (
-        db.query(QuestionDB)
-        .filter(QuestionDB.audit_id == audit_id)
-        .filter(~QuestionDB.answers.any())
-        .all()
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Build and execute query
+    query = db.query(QuestionDB).filter(
+        QuestionDB.audit_id == audit_id,
+        ~QuestionDB.answers.any()
     )
+    questions = query.all()
     return questions
 
 @router.get("/audits/{audit_id}/questions/{question_id}", response_model=QuestionResponse)
@@ -109,13 +108,19 @@ async def get_question_details(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get details of a specific question"""
-    question = (
-        db.query(QuestionDB)
-        .filter(QuestionDB.id == question_id, QuestionDB.audit_id == audit_id)
-        .first()
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Get question or 404
+    question = get_or_404(
+        db,
+        QuestionDB,
+        question_id,
+        "Question not found"
     )
-
-    if not question:
+    
+    # Verify question belongs to audit
+    if question.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Question not found")
 
     return question
@@ -134,13 +139,24 @@ async def submit_answer(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Submit an answer to a question"""
-    question = (
-        db.query(QuestionDB)
-        .filter(QuestionDB.id == question_id, QuestionDB.audit_id == audit_id)
-        .first()
+    # Verify audit access with required roles
+    audit = verify_audit_access(
+        db, 
+        audit_id, 
+        current_user,
+        [UserRole.ORGANISATION_USER, UserRole.ORGANISATION_LEAD]
     )
-
-    if not question:
+    
+    # Get question or 404
+    question = get_or_404(
+        db,
+        QuestionDB,
+        question_id,
+        "Question not found"
+    )
+    
+    # Verify question belongs to audit
+    if question.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Question not found")
 
     db_answer = AnswerDB(
@@ -157,16 +173,24 @@ async def submit_answer(
 async def get_all_questions(
     request: Request,
     audit_id: str,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get all questions for an audit"""
-    questions = (
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Build base query
+    query = (
         db.query(QuestionDB)
         .options(selectinload(QuestionDB.answers))
         .filter(QuestionDB.audit_id == audit_id)
-        .all()
     )
+    
+    # Apply pagination
+    questions = paginate_query(query, skip, limit).all()
     return questions
 
 @router.get("/audits/{audit_id}/questions/{question_id}/answers", response_model=List[AnswerResponse])
@@ -175,20 +199,30 @@ async def get_answers_for_question(
     request: Request,
     audit_id: str,
     question_id: str,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get all answers for a specific question"""
-    question = (
-        db.query(QuestionDB)
-        .filter(QuestionDB.id == question_id, QuestionDB.audit_id == audit_id)
-        .first()
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Get question or 404
+    question = get_or_404(
+        db,
+        QuestionDB,
+        question_id,
+        "Question not found"
     )
-
-    if not question:
+    
+    # Verify question belongs to audit
+    if question.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Question not found")
-
-    answers = db.query(AnswerDB).filter(AnswerDB.question_id == question_id).all()
+        
+    # Get answers
+    query = db.query(AnswerDB).filter(AnswerDB.question_id == question_id)
+    answers = paginate_query(query, skip, limit).all()
     return answers
 
 @router.get("/audits/{audit_id}/questions/{question_id}/answers/{answer_id}", response_model=AnswerResponse)
@@ -202,15 +236,29 @@ async def get_answer_details(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get details of a specific answer"""
-    answer = (
-        db.query(AnswerDB)
-        .filter(AnswerDB.id == answer_id, AnswerDB.question_id == question_id)
-        .join(QuestionDB)
-        .filter(QuestionDB.audit_id == audit_id)
-        .first()
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Get answer or 404
+    answer = get_or_404(
+        db,
+        AnswerDB,
+        answer_id,
+        "Answer not found"
     )
-
-    if not answer:
+    
+    # Verify answer belongs to question and audit
+    if answer.question_id != question_id:
+        raise HTTPException(status_code=404, detail="Answer not found")
+        
+    question = get_or_404(
+        db,
+        QuestionDB,
+        question_id,
+        "Question not found"
+    )
+    
+    if question.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Answer not found")
 
     return answer
