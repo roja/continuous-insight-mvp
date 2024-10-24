@@ -306,7 +306,6 @@ async def update_user_role(
 
 
 @router.post("/companies", response_model=CompanyResponse)
-@authorize_company_access(required_roles=[UserRole.GLOBAL_ADMIN])
 async def create_company(
     request: Request,
     company: CompanyCreate,
@@ -314,6 +313,12 @@ async def create_company(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Create a new company (Global Admin only)"""
+    if not current_user.is_global_administrator:
+        raise HTTPException(
+            status_code=403,
+            detail="Only global administrators can create companies"
+        )
+
     company_data = company.model_dump(exclude_unset=True)
     if "areas_of_focus" in company_data:
         company_data["areas_of_focus"] = ",".join(company_data["areas_of_focus"])
