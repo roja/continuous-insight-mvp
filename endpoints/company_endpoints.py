@@ -305,39 +305,38 @@ async def update_user_role(
     return association
 
 
-@router.post("/audits/{audit_id}/company", response_model=CompanyResponse)
-@authorize_company_access(
-    audit_id_param="audit_id",
-    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
-)
+@router.post("/companies", response_model=CompanyResponse)
 async def create_company(
     request: Request,
-    audit_id: str,
     company: CompanyCreate,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    """Create a new company for an audit"""
-    db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if db_audit is None:
-        raise HTTPException(status_code=404, detail="Audit not found")
-
+    """Create a new company"""
     company_data = company.model_dump(exclude_unset=True)
     if "areas_of_focus" in company_data:
         company_data["areas_of_focus"] = ",".join(company_data["areas_of_focus"])
     if "size" in company_data and company_data["size"] is not None:
         company_data["size"] = company_data["size"].value
 
-    db_company = CompanyDB(audit_id=audit_id, **company_data)
+    db_company = CompanyDB(**company_data)
     db.add(db_company)
     db.commit()
     db.refresh(db_company)
+
+    # Create initial user-company association for creator as ORGANISATION_LEAD
+    association = UserCompanyAssociation(
+        user_id=current_user.id,
+        company_id=db_company.id,
+        role=UserRole.ORGANISATION_LEAD
+    )
+    db.add(association)
+    db.commit()
 
     response_data = db_company.__dict__
     if response_data["areas_of_focus"]:
         response_data["areas_of_focus"] = response_data["areas_of_focus"].split(",")
     return CompanyResponse(**response_data)
-
 
 
 @router.put("/audits/{audit_id}/company", response_model=CompanyResponse)
