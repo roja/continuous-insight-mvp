@@ -23,8 +23,6 @@ from endpoints import (
 
 
 def create_app() -> FastAPI:
-    # Create database tables
-    Base.metadata.create_all(bind=engine)
 
     # Initialize FastAPI app
     app = FastAPI(
