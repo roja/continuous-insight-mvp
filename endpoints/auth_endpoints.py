@@ -43,11 +43,10 @@ async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
         )
 
         # Get or create user
-        user = (
-            db.query(UserDB)
-            .filter(UserDB.oauth_id == idinfo["sub"], UserDB.oauth_provider == "google")
-            .first()
-        )
+        user = db.query(UserDB).filter(
+            UserDB.oauth_id == idinfo["sub"],
+            UserDB.oauth_provider == "google"
+        ).first()
 
         if not user:
             user = UserDB(
@@ -94,11 +93,10 @@ async def auth_google(auth_request: GoogleAuthRequest, db: Session = Depends(get
             raise ValueError("Wrong issuer.")
 
         # Get or create user
-        user = (
-            db.query(UserDB)
-            .filter(UserDB.oauth_id == idinfo["sub"], UserDB.oauth_provider == "google")
-            .first()
-        )
+        user = db.query(UserDB).filter(
+            UserDB.oauth_id == idinfo["sub"],
+            UserDB.oauth_provider == "google"
+        ).first()
 
         if not user:
             user = UserDB(
