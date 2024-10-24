@@ -321,11 +321,14 @@ async def create_company(
         )
 
     company_data = company.model_dump(exclude_unset=True)
-    if "areas_of_focus" in company_data:
+    if "areas_of_focus" in company_data and company_data["areas_of_focus"]:
         company_data["areas_of_focus"] = ",".join(company_data["areas_of_focus"])
     if "size" in company_data and company_data["size"] is not None:
         company_data["size"] = company_data["size"].value
 
+    # Remove None values to prevent SQLAlchemy from explicitly setting NULL
+    company_data = {k: v for k, v in company_data.items() if v is not None}
+    
     db_company = CompanyDB(**company_data)
     db.add(db_company)
     db.commit()
