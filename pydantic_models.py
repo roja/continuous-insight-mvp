@@ -2,7 +2,6 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Dict, TypeVar, Generic
 from pydantic import BaseModel, Field, field_validator, ConfigDict, create_model
-from pydantic.generics import GenericModel
 
 # Enums
 class MaturityLevel(str, Enum):
@@ -50,7 +49,7 @@ class BaseResponseModel(IDMixin, TimestampMixin):
 
 T = TypeVar("T")
 
-class ListResponse(GenericModel, Generic[T]):
+class ListResponse(BaseModel, Generic[T]):
     """Generic list response wrapper"""
     items: List[T]
     total: int
