@@ -133,8 +133,7 @@ class AuditBase(BaseModel):
     description: Optional[str] = None
 
 class AuditCreate(AuditBase, BaseRequestModel):
-    company_id: Optional[str] = None
-    company_name: Optional[str] = None
+    company_id: str
 
 class AuditResponse(AuditBase, BaseResponseModel, CompanyRelatedMixin):
     pass
