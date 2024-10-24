@@ -235,6 +235,9 @@ class DeleteCustomCriteriaResponse(BaseModel):
     message: str
     criteria_id: str
 
+class ParseEvidenceRequest(BaseRequestModel):
+    file_ids: List[str]
+
 class UpdateCustomCriteriaRequest(BaseRequestModel):
     title: Optional[str] = None
     description: Optional[str] = None

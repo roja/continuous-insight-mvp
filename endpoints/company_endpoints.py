@@ -373,39 +373,36 @@ async def update_company(
     return db_company
 
 
-@router.post(
-    "/audits/{audit_id}/company/actions/parse-evidence", response_model=CompanyResponse
-)
+@router.post("/companies/{company_id}/evidence", response_model=CompanyResponse)
 @authorize_company_access(required_roles=[UserRole.AUDITOR])
-async def parse_evidence_for_company(
+async def parse_company_evidence(
     request: Request,
-    audit_id: str,
+    company_id: str,
+    evidence_request: ParseEvidenceRequest,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    """Parse evidence files for a company and extract relevant information"""
+    """Parse specified evidence files for a company and extract relevant information"""
     # Set up logging
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)
 
-    # Get the audit
-    db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if db_audit is None:
-        raise HTTPException(status_code=404, detail="Audit not found")
+    # Get the company
+    db_company = verify_company_access(db, company_id, current_user, [UserRole.AUDITOR])
+    if not db_company:
+        raise HTTPException(status_code=404, detail="Company not found")
 
-    # Get the company associated with the audit
-    db_company = db_audit.company
-    if db_company is None:
-        raise HTTPException(status_code=404, detail="Company not found for this audit")
-
-    # Get all processed evidence files that haven't been parsed yet
+    # Get current processed file IDs
     processed_file_ids = db_company.processed_file_ids or []
     logger.debug(f"Initial processed_file_ids: {processed_file_ids}")
 
+    # Get all valid evidence files that haven't been parsed yet
     evidence_files = (
         db.query(EvidenceFileDB)
+        .join(AuditDB)
         .filter(
-            EvidenceFileDB.audit_id == audit_id,
+            EvidenceFileDB.id.in_(evidence_request.file_ids),
+            AuditDB.company_id == company_id,
             EvidenceFileDB.status == "complete",
             EvidenceFileDB.text_content != None,
             ~EvidenceFileDB.id.in_(processed_file_ids if processed_file_ids else []),
@@ -413,7 +410,7 @@ async def parse_evidence_for_company(
         .all()
     )
 
-    logger.debug(f"Number of evidence files to process: {len(evidence_files)}")
+    logger.debug(f"Number of valid evidence files to process: {len(evidence_files)}")
 
     if not evidence_files:
         logger.debug("No new files to parse, proceeding to stage 2")
@@ -422,20 +419,19 @@ async def parse_evidence_for_company(
     # Stage 1: Parse each new evidence file
     new_processed_file_ids = processed_file_ids.copy() if processed_file_ids else []
     for file in evidence_files:
-        if file.text_content:  # Ensure there's content to parse
-            parsed_content = parse_single_evidence_file(file, db_company)
-            parsed_content = (
-                "=== This is information gathered from the file "
-                + file.filename
-                + " ==="
-                + parsed_content
-            )
-            if db_company.raw_evidence:
-                db_company.raw_evidence += "\n\n" + parsed_content
-            else:
-                db_company.raw_evidence = parsed_content
-            new_processed_file_ids.append(file.id)
-            logger.debug(f"Processed file ID appended: {file.id}")
+        parsed_content = parse_single_evidence_file(file, db_company)
+        parsed_content = (
+            "=== This is information gathered from the file "
+            + file.filename
+            + " ==="
+            + parsed_content
+        )
+        if db_company.raw_evidence:
+            db_company.raw_evidence += "\n\n" + parsed_content
+        else:
+            db_company.raw_evidence = parsed_content
+        new_processed_file_ids.append(file.id)
+        logger.debug(f"Processed file ID appended: {file.id}")
 
     # Update the processed_file_ids
     db_company.processed_file_ids = new_processed_file_ids
