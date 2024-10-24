@@ -26,4 +26,5 @@ evidence_files
 .pytest_cache
 
 tech_audit.db
+tech_audit.db.old
 .aider*
