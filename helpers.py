@@ -433,6 +433,6 @@ def filter_by_user_company_access(query: Any, user: UserDB, company_join_path=No
 
     return (
         query.join(UserCompanyAssociation, 
-                  UserCompanyAssociation.company_id == query.primary_entity.class_.id)
+                  UserCompanyAssociation.company_id == CompanyDB.id)
         .filter(UserCompanyAssociation.user_id == user.id)
     )
