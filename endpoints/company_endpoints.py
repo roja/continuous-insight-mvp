@@ -339,20 +339,6 @@ async def create_company(
     return CompanyResponse(**response_data)
 
 
-@router.get("/audits/{audit_id}/company", response_model=CompanyResponse)
-@authorize_company_access(required_roles=list(UserRole))
-async def get_company(
-    request: Request,
-    audit_id: str,
-    db: Session = Depends(get_db),
-    current_user: UserDB = Depends(get_current_user),
-):
-    """Get company details for an audit"""
-    db_audit = verify_audit_access(db, audit_id, current_user)
-    db_company = get_or_404(db, CompanyDB, db_audit.company_id, "Company not found for this audit")
-
-    return db_company
-
 
 @router.put("/audits/{audit_id}/company", response_model=CompanyResponse)
 @authorize_company_access(
