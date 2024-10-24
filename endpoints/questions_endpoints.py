@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session, selectinload, joinedload
 from typing import List
 
@@ -19,7 +19,12 @@ from pydantic_models import (
     AnswerCreate,
     AnswerResponse,
 )
-from helpers import generate_questions_using_llm
+from helpers import (
+    generate_questions_using_llm,
+    verify_audit_access,
+    get_or_404,
+    paginate_query,
+)
 
 router = APIRouter(tags=["questions"])
 
