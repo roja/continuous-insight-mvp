@@ -320,33 +320,24 @@ async def create_company(
             detail="Only global administrators can create companies"
         )
 
+    # Convert Pydantic model to dict and handle special fields
     company_data = company.model_dump(exclude_unset=True)
-    if "areas_of_focus" in company_data and company_data["areas_of_focus"]:
+    if company_data.get("areas_of_focus"):
         company_data["areas_of_focus"] = ",".join(company_data["areas_of_focus"])
-    if "size" in company_data and company_data["size"] is not None:
+    if company_data.get("size"):
         company_data["size"] = company_data["size"].value
 
-    # Remove None values to prevent SQLAlchemy from explicitly setting NULL
-    company_data = {k: v for k, v in company_data.items() if v is not None}
-    
+    # Create and save company
     db_company = CompanyDB(**company_data)
     db.add(db_company)
     db.commit()
     db.refresh(db_company)
 
-    # Create initial user-company association for creator as ORGANISATION_LEAD
-    association = UserCompanyAssociation(
-        user_id=current_user.id,
-        company_id=db_company.id,
-        role=UserRole.ORGANISATION_LEAD
-    )
-    db.add(association)
-    db.commit()
-
-    response_data = db_company.__dict__
-    if response_data["areas_of_focus"]:
-        response_data["areas_of_focus"] = response_data["areas_of_focus"].split(",")
-    return CompanyResponse(**response_data)
+    # Convert areas_of_focus back to list for response
+    if db_company.areas_of_focus:
+        db_company.areas_of_focus = db_company.areas_of_focus.split(",")
+    
+    return db_company
 
 
 @router.put("/companies/{company_id}", response_model=CompanyResponse)
