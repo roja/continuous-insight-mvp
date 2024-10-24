@@ -29,6 +29,7 @@ from pydantic_models import (
     AddUserToCompanyRequest,
     UserCompanyAssociationResponse,
     AuditListResponse,
+    ParseEvidenceRequest,
 )
 
 from helpers import parse_single_evidence_file, process_raw_evidence
