@@ -121,6 +121,12 @@ class CompanyListResponse(BaseResponseModel):
     size: Optional[str]
     business_type: Optional[str]
 
+class CompanyUserResponse(BaseModel):
+    id: str
+    email: str
+    name: str
+    role: UserRole
+
 # Audit Models
 class AuditBase(BaseModel):
     name: str
