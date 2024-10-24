@@ -161,21 +161,9 @@ async def list_companies(
     current_user: UserDB = Depends(get_current_user),
 ):
     """List all companies accessible to the current user"""
-    # System administrators can see all companies
-    if current_user.is_global_administrator:
-        companies = db.query(CompanyDB).offset(skip).limit(limit).all()
-        return companies
-
-    # Regular users can only see companies they're associated with
-    companies = (
-        db.query(CompanyDB)
-        .join(UserCompanyAssociation)
-        .filter(UserCompanyAssociation.user_id == current_user.id)
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-    return companies
+    query = db.query(CompanyDB)
+    query = filter_by_user_company_access(query, current_user)
+    return paginate_query(query, skip, limit).all()
 
 
 @router.get("/companies/{company_id}", response_model=CompanyResponse)
@@ -187,10 +175,7 @@ async def get_company_detail(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get detailed information about a specific company"""
-    company = db.query(CompanyDB).filter(CompanyDB.id == company_id).first()
-    if company is None:
-        raise HTTPException(status_code=404, detail="Company not found")
-    return company
+    return verify_company_access(db, company_id, current_user)
 
 
 @router.get("/companies/{company_id}/users", response_model=List[CompanyUserResponse])
@@ -202,20 +187,8 @@ async def list_company_users(
     current_user: UserDB = Depends(get_current_user),
 ):
     """List all users associated with a company"""
-    if not current_user.is_global_administrator:
-        # Verify user has access to this company
-        user_association = (
-            db.query(UserCompanyAssociation)
-            .filter(
-                UserCompanyAssociation.user_id == current_user.id,
-                UserCompanyAssociation.company_id == company_id,
-            )
-            .first()
-        )
-        if not user_association:
-            raise HTTPException(
-                status_code=403, detail="You don't have access to this company's users"
-            )
+    # Verify access to company
+    verify_company_access(db, company_id, current_user)
 
     # Get all users associated with the company
     users_with_roles = (
@@ -248,30 +221,12 @@ async def list_company_audits(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """List all audits associated with a company"""
-    if not current_user.is_global_administrator:
-        # Verify user has access to this company
-        user_association = (
-            db.query(UserCompanyAssociation)
-            .filter(
-                UserCompanyAssociation.user_id == current_user.id,
-                UserCompanyAssociation.company_id == company_id,
-            )
-            .first()
-        )
-        if not user_association:
-            raise HTTPException(
-                status_code=403, detail="You don't have access to this company's audits"
-            )
+    # Verify access to company
+    verify_company_access(db, company_id, current_user)
 
     # Query audits associated with the company
-    audits = (
-        db.query(AuditDB)
-        .filter(AuditDB.company_id == company_id)
-        .order_by(AuditDB.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    query = db.query(AuditDB).filter(AuditDB.company_id == company_id).order_by(AuditDB.created_at.desc())
+    audits = paginate_query(query, skip, limit).all()
 
     return audits
 
@@ -386,13 +341,8 @@ async def get_company(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get company details for an audit"""
-    db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if db_audit is None:
-        raise HTTPException(status_code=404, detail="Audit not found")
-
-    db_company = db_audit.company
-    if db_company is None:
-        raise HTTPException(status_code=404, detail="Company not found for this audit")
+    db_audit = verify_audit_access(db, audit_id, current_user)
+    db_company = get_or_404(db, CompanyDB, db_audit.company_id, "Company not found for this audit")
 
     return db_company
 
