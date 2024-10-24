@@ -18,16 +18,17 @@ async def get_current_user_details(
     """
     Get details about the currently authenticated user, including their company associations
     """
-    # Get user or 404
-    user_with_associations = get_or_404(
-        db,
-        UserDB,
-        current_user.id,
-        "User not found"
+    # Get user with associations
+    user_with_associations = (
+        db.query(UserDB)
+        .options(joinedload(UserDB.company_associations))
+        .filter(UserDB.id == current_user.id)
+        .first()
     )
     
-    # Load associations
-    db.refresh(user_with_associations, ['company_associations'])
+    if not user_with_associations:
+        raise HTTPException(status_code=404, detail="User not found")
+        
     return user_with_associations
 
 @router.get("/users/me/companies", response_model=List[CompanyListResponse])
