@@ -339,30 +339,25 @@ async def create_company(
     return CompanyResponse(**response_data)
 
 
-@router.put("/audits/{audit_id}/company", response_model=CompanyResponse)
-@authorize_company_access(
-    audit_id_param="audit_id",
-    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
-)
+@router.put("/companies/{company_id}", response_model=CompanyResponse)
+@authorize_company_access(required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD])
 async def update_company(
     request: Request,
-    audit_id: str,
+    company_id: str,
     company: CompanyCreate,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    """Update company details for an audit"""
-    db_audit = db.query(AuditDB).filter(AuditDB.id == audit_id).first()
-    if db_audit is None:
-        raise HTTPException(status_code=404, detail="Audit not found")
-
-    db_company = db_audit.company
-    if db_company is None:
-        raise HTTPException(status_code=404, detail="Company not found for this audit")
+    """Update company details"""
+    db_company = verify_company_access(
+        db, company_id, current_user, [UserRole.AUDITOR, UserRole.ORGANISATION_LEAD]
+    )
 
     company_data = company.model_dump(exclude_unset=True)
     if "areas_of_focus" in company_data:
         company_data["areas_of_focus"] = ",".join(company_data["areas_of_focus"])
+    if "size" in company_data and company_data["size"] is not None:
+        company_data["size"] = company_data["size"].value
 
     for key, value in company_data.items():
         setattr(db_company, key, value)
