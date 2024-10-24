@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile, status, BackgroundTasks, Query
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
@@ -7,10 +7,16 @@ import os
 import hashlib
 
 from database import get_db
-from db_models import UserDB, UserRole, EvidenceFileDB
+from db_models import UserDB, UserRole, EvidenceFileDB, AuditDB
 from auth import get_current_user, authorize_company_access
 from pydantic_models import EvidenceFileResponse
-from helpers import process_file
+from helpers import (
+    process_file,
+    verify_audit_access,
+    get_or_404,
+    paginate_query,
+    filter_by_user_company_access,
+)
 
 router = APIRouter(tags=["evidence files"])
 
@@ -116,11 +122,20 @@ async def upload_evidence_file(
 async def list_evidence_files(
     request: Request,
     audit_id: str,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    """List all evidence files for an audit"""
-    files = db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id).all()
+    """List all evidence files for an audit with pagination"""
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Build query
+    query = db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id)
+    
+    # Apply pagination
+    files = paginate_query(query, skip, limit).all()
     return files
 
 @router.get(
@@ -136,13 +151,21 @@ async def get_evidence_file(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get details of a specific evidence file"""
-    file = (
-        db.query(EvidenceFileDB)
-        .filter(EvidenceFileDB.id == file_id, EvidenceFileDB.audit_id == audit_id)
-        .first()
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+    
+    # Get file or raise 404
+    file = get_or_404(
+        db, 
+        EvidenceFileDB,
+        file_id,
+        "Evidence file not found"
     )
-    if file is None:
+    
+    # Verify file belongs to audit
+    if file.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Evidence file not found")
+        
     return file
 
 @router.get("/audits/{audit_id}/evidence-files/{file_id}/content")
@@ -184,12 +207,24 @@ async def delete_evidence_file(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Delete an evidence file"""
-    file = (
-        db.query(EvidenceFileDB)
-        .filter(EvidenceFileDB.id == file_id, EvidenceFileDB.audit_id == audit_id)
-        .first()
+    # Verify audit access with required roles
+    audit = verify_audit_access(
+        db, 
+        audit_id, 
+        current_user, 
+        [UserRole.AUDITOR, UserRole.ORGANISATION_LEAD]
     )
-    if file is None:
+    
+    # Get file or raise 404
+    file = get_or_404(
+        db, 
+        EvidenceFileDB,
+        file_id,
+        "Evidence file not found"
+    )
+    
+    # Verify file belongs to audit
+    if file.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Evidence file not found")
 
     # Delete file from filesystem
