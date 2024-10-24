@@ -1,8 +1,10 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Dict
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from typing import List, Optional, Dict, TypeVar, Generic
+from pydantic import BaseModel, Field, field_validator, ConfigDict, create_model
+from pydantic.generics import GenericModel
 
+# Enums
 class MaturityLevel(str, Enum):
     novice = "novice"
     intermediate = "intermediate"
@@ -23,79 +25,70 @@ class UserRole(str, Enum):
     OBSERVER_LEAD = "observer_lead"
     OBSERVER_USER = "observer_user"
 
-class CompanyUserResponse(BaseModel):
-    id: str
-    email: str
-    name: str
-    role: UserRole
+# Mixins
+class TimestampMixin(BaseModel):
     created_at: datetime
+    updated_at: Optional[datetime] = None
 
+class IDMixin(BaseModel):
+    id: str
+
+class AuditRelatedMixin(BaseModel):
+    audit_id: str
+
+class CompanyRelatedMixin(BaseModel):
+    company_id: str
+
+# Base Models
+class BaseRequestModel(BaseModel):
+    """Base class for all request models"""
+    model_config = ConfigDict(extra="forbid")
+
+class BaseResponseModel(IDMixin, TimestampMixin):
+    """Base class for all response models"""
     model_config = ConfigDict(from_attributes=True)
 
-class AddUserToCompanyRequest(BaseModel):
-    user_id: str
-    role: UserRole
+T = TypeVar("T")
 
-class UserCompanyAssociationCreate(BaseModel):
-    company_id: str
-    role: UserRole
+class ListResponse(GenericModel, Generic[T]):
+    """Generic list response wrapper"""
+    items: List[T]
+    total: int
+    skip: int
+    limit: int
 
-class UserCompanyAssociationResponse(BaseModel):
-    id: str
-    company_id: str
-    user_id: str
-    role: UserRole
-    created_at: datetime
-    updated_at: Optional[datetime]
-
-    model_config = ConfigDict(from_attributes=True)
-
-class UserResponse(BaseModel):
-    id: str
+# User Models
+class UserBase(BaseModel):
     email: str
     name: str
+
+class UserCompanyAssociationBase(BaseModel):
+    role: UserRole
+
+class UserCompanyAssociationCreate(UserCompanyAssociationBase):
+    company_id: str
+
+class UserCompanyAssociationResponse(UserCompanyAssociationBase, BaseResponseModel):
+    user_id: str
+    company_id: str
+
+class UserResponse(UserBase, BaseResponseModel):
     is_global_administrator: bool
     company_associations: List[UserCompanyAssociationResponse]
-    created_at: datetime
-    updated_at: Optional[datetime]
 
-    model_config = ConfigDict(from_attributes=True)
+class AddUserToCompanyRequest(BaseRequestModel):
+    user_id: str
+    role: UserRole
 
-class AuditResponse(BaseModel):
-    id: str
-    name: str
-    description: str = Field(default=None)
-    company_id: str
-    created_at: datetime
-    updated_at: Optional[datetime]
-
-    model_config = ConfigDict(from_attributes=True)
-
-class EvidenceFileResponse(BaseModel):
-    id: str
-    audit_id: str
-    filename: str
-    file_type: str
-    status: str
-
-    model_config = ConfigDict(from_attributes=True)
-
-class CriteriaCreate(BaseModel):
-    title: str
-    description: str
-    parent_id: Optional[str] = None
-    maturity_definitions: Dict[MaturityLevel, str]
-    section: str
-    expected_maturity_level: MaturityLevel
-
-class CompanyCreate(BaseModel):
+# Company Models
+class CompanyBase(BaseModel):
     name: str = Field(..., min_length=1)
-    description: Optional[str] = Field(None)
-    sector: Optional[str] = Field(None)
+    description: Optional[str] = None
+    sector: Optional[str] = None
     size: Optional[CompanySize] = None
-    business_type: Optional[str] = Field(None)
-    technology_stack: Optional[str] = Field(None)
-    areas_of_focus: Optional[List[str]] = Field(None)
+    business_type: Optional[str] = None
+    technology_stack: Optional[str] = None
+    areas_of_focus: Optional[List[str]] = None
 
     @field_validator("size")
     def validate_size(cls, v):
@@ -108,19 +101,6 @@ class CompanyCreate(BaseModel):
                 )
         return v
 
-class AuditCreate(BaseModel):
-    name: str
-    description: str = Field(default=None)
-    company_id: Optional[str] = Field(default=None)
-    company_name: Optional[str] = Field(default=None)
-
-class CompanyResponse(CompanyCreate):
-    id: str
-    created_at: datetime
-    updated_at: Optional[datetime]
-
-    model_config = ConfigDict(from_attributes=True)
-
     @field_validator("areas_of_focus", mode="before")
     @classmethod
     def split_areas_of_focus(cls, v):
@@ -128,110 +108,117 @@ class CompanyResponse(CompanyCreate):
             return v.split(",") if v else []
         return v
 
-class CompanyListResponse(BaseModel):
-    id: str
+class CompanyCreate(CompanyBase, BaseRequestModel):
+    pass
+
+class CompanyResponse(CompanyBase, BaseResponseModel):
+    pass
+
+class CompanyListResponse(BaseResponseModel):
     name: str
     sector: Optional[str]
-    description: Optional[str] = Field(None)
+    description: Optional[str] = None
     size: Optional[str]
     business_type: Optional[str]
-    created_at: datetime
-    updated_at: Optional[datetime]
 
-    model_config = ConfigDict(from_attributes=True)
+# Audit Models
+class AuditBase(BaseModel):
+    name: str
+    description: Optional[str] = None
 
-class CriteriaSelect(BaseModel):
+class AuditCreate(AuditBase, BaseRequestModel):
+    company_id: Optional[str] = None
+    company_name: Optional[str] = None
+
+class AuditResponse(AuditBase, BaseResponseModel, CompanyRelatedMixin):
+    pass
+
+class AuditListResponse(AuditBase, BaseResponseModel):
+    pass
+
+# Criteria Models
+class CriteriaBase(BaseModel):
+    title: str
+    description: str
+    section: str
+
+class CriteriaCreate(CriteriaBase, BaseRequestModel):
+    parent_id: Optional[str] = None
+    maturity_definitions: Dict[MaturityLevel, str]
+    expected_maturity_level: MaturityLevel
+
+class CriteriaResponse(CriteriaBase, BaseResponseModel):
+    parent_id: Optional[str]
+    maturity_definitions: dict
+    is_specific_to_audit: Optional[str]
+
+class CriteriaSelect(BaseRequestModel):
     criteria_id: str
     expected_maturity_level: Optional[MaturityLevel] = None
 
-class CriteriaSelectionResponse(BaseModel):
-    id: str
-    audit_id: str
+class CriteriaSelectionResponse(BaseResponseModel, AuditRelatedMixin):
     criteria_id: str
     expected_maturity_level: Optional[MaturityLevel]
 
-    model_config = ConfigDict(from_attributes=True)
-
-class CriteriaResponse(BaseModel):
-    id: str
-    title: str
-    description: str
-    parent_id: str | None
-    maturity_definitions: dict
-    section: str
-    is_specific_to_audit: str | None
-
-    model_config = ConfigDict(from_attributes=True)
-
-class EvidenceCreate(BaseModel):
+# Evidence Models
+class EvidenceBase(BaseModel):
     content: str
     source: str
     source_id: str
 
-class EvidenceResponse(BaseModel):
-    id: str
-    audit_id: str
+class EvidenceCreate(EvidenceBase, BaseRequestModel):
+    pass
+
+class EvidenceResponse(EvidenceBase, BaseResponseModel, AuditRelatedMixin):
     criteria_id: str
-    content: str
-    source: str
-    source_id: str
     evidence_type: str
     start_position: Optional[int] = None
-    created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+class EvidenceFileResponse(BaseResponseModel, AuditRelatedMixin):
+    filename: str
+    file_type: str
+    status: str
 
-class AnswerCreate(BaseModel):
+# Question and Answer Models
+class QuestionBase(BaseModel):
+    text: str
+
+class QuestionCreate(QuestionBase, BaseRequestModel):
+    pass
+
+class AnswerBase(BaseModel):
     text: str
     submitted_by: str
 
-class AnswerResponse(BaseModel):
-    id: str
-    text: str
-    submitted_by: str
-    created_at: datetime
+class AnswerCreate(AnswerBase, BaseRequestModel):
+    pass
 
-    model_config = ConfigDict(from_attributes=True)
+class AnswerResponse(AnswerBase, BaseResponseModel):
+    pass
 
-class AuditListResponse(BaseModel):
-    id: str
-    name: str
-    description: Optional[str]
-    created_at: datetime
-    updated_at: Optional[datetime]
-
-    model_config = ConfigDict(from_attributes=True)
-
-class QuestionCreate(BaseModel):
-    text: str
-
-class QuestionResponse(BaseModel):
-    id: str
-    text: str
-    created_at: datetime
+class QuestionResponse(QuestionBase, BaseResponseModel):
     answers: List[AnswerResponse]
 
-    model_config = ConfigDict(from_attributes=True)
-
-class CriteriaEvidenceResponse(BaseModel):
-    evidence: List[EvidenceResponse]
-    questions: List[QuestionResponse]
-
-    model_config = ConfigDict(from_attributes=True)
-
-class MaturityAssessmentCreate(BaseModel):
+# Assessment Models
+class MaturityAssessmentBase(BaseModel):
     maturity_level: MaturityLevel
-    comments: Optional[str] = Field(default=None)
+    comments: Optional[str] = None
 
-class MaturityAssessmentResponse(MaturityAssessmentCreate):
-    id: str
+class MaturityAssessmentCreate(MaturityAssessmentBase, BaseRequestModel):
+    pass
+
+class MaturityAssessmentResponse(MaturityAssessmentBase, BaseResponseModel):
     criteria_id: str
     assessed_by: str
     assessed_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+# Composite Response Models
+class CriteriaEvidenceResponse(BaseModel):
+    evidence: List[EvidenceResponse]
+    questions: List[QuestionResponse]
 
-class RemoveCriteriaRequest(BaseModel):
+# Operation Response Models
+class RemoveCriteriaRequest(BaseRequestModel):
     criteria_id: str
 
 class RemoveCriteriaResponse(BaseModel):
@@ -243,12 +230,13 @@ class DeleteCustomCriteriaResponse(BaseModel):
     message: str
     criteria_id: str
 
-class UpdateCustomCriteriaRequest(BaseModel):
+class UpdateCustomCriteriaRequest(BaseRequestModel):
     title: Optional[str] = None
     description: Optional[str] = None
     parent_id: Optional[str] = None
     maturity_definitions: Optional[Dict[str, str]] = None
     section: Optional[str] = None
 
-class GoogleAuthRequest(BaseModel):
+# Auth Models
+class GoogleAuthRequest(BaseRequestModel):
     token: str
