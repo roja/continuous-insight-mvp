@@ -16,7 +16,14 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
+import os
+import sys
 from db_models import Base
+
+# ensure the models are in the Python path
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# this is the Alembic Config object, which provides
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
