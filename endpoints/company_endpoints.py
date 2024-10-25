@@ -464,7 +464,11 @@ async def parse_company_evidence(
     # Stage 1: Parse each new evidence file
     new_processed_file_ids = processed_file_ids.copy() if processed_file_ids else []
     for file in evidence_files:
-        parsed_content = parse_single_evidence_file(file, db_company)
+        if not file.text_content:
+            logger.debug(f"Error parsing file {file.id} - no text contents")
+            continue
+            
+        parsed_content = parse_evidence_file(file.text_content, db_company.name, file.file_type)
         parsed_content = (
             "=== This is information gathered from the file "
             + file.filename

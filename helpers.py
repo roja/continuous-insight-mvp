@@ -236,14 +236,6 @@ def process_evidence_for_criteria(audit_id: str, criteria_id: str):
         db.close()
 
 
-def parse_single_evidence_file(file: EvidenceFileDB, db_company: CompanyDB) -> str:
-    """Parse a single evidence file for company information."""
-    if not file.text_content:
-        print(f"Error parsing file {file.id} - no text contents")
-        return ""
-
-    return parse_evidence_file(file.text_content, db_company.name, file.file_type)
-
 
 def process_raw_evidence(db_company: CompanyDB, db: Session) -> CompanyResponse:
     """Process raw evidence and update company information."""
