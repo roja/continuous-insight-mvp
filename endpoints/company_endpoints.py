@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Response, status
 from sqlalchemy.orm import Session
@@ -385,15 +386,8 @@ async def delete_company(
     # Get the company
     company = get_or_404(db, CompanyDB, company_id, "Company not found")
 
-    # Delete all associated records
-    db.query(UserCompanyAssociation).filter(
-        UserCompanyAssociation.company_id == company_id
-    ).delete()
-    
-    db.query(AuditDB).filter(AuditDB.company_id == company_id).delete()
-    
-    # Delete the company itself
-    db.delete(company)
+    # Soft delete the company
+    company.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
     return Response(status_code=204)

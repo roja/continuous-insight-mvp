@@ -110,6 +110,7 @@ class CompanyDB(Base):
     updated_from_evidence = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
     raw_evidence = Column(Text, nullable=True)
     processed_file_ids = Column(MutableList.as_mutable(JSON), default=[])
 
