@@ -270,12 +270,14 @@ async def update_user_role(
             detail="Only organization leads and auditors can manage user roles",
         )
 
-    # Get the association
+    # Get the association, excluding soft-deleted companies
     association = (
         db.query(UserCompanyAssociation)
+        .join(CompanyDB)
         .filter(
             UserCompanyAssociation.user_id == user_id,
             UserCompanyAssociation.company_id == company_id,
+            CompanyDB.deleted_at.is_(None)
         )
         .first()
     )
@@ -417,6 +419,10 @@ async def parse_company_evidence(
     # Get the company
     db_company = verify_company_access(db, company_id, current_user, [UserRole.AUDITOR])
     if not db_company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    # Verify company is not soft-deleted
+    if db_company.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Company not found")
 
     # Get current processed file IDs
