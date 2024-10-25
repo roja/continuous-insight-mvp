@@ -273,11 +273,11 @@ def analyze_company_evidence(raw_evidence: str) -> dict:
             "properties": {
                 "description": {
                     "type": "string",
-                    "description": "A description of the company focusing on its product/offering (approx. 200 words).",
+                    "description": "A description of the company focusing on its product/offering (approx. 200 words). Always use british english.",
                 },
                 "sector": {
                     "type": "string",
-                    "description": "The sector the company operates in.",
+                    "description": "The sector the company operates in. i.e. consumer electronics, financial markets... max 2 words.",
                 },
                 "size": {
                     "type": "string",
@@ -287,6 +287,7 @@ def analyze_company_evidence(raw_evidence: str) -> dict:
                 "business_type": {
                     "type": "string",
                     "description": "The type of business (B2B, B2C, etc.).",
+                    "enum": ["unknown", "B2B", "B2C", "B2B2C", "E2E", "Education", "Charity", "Public Sector", "Other"], 
                 },
                 "technology_stack": {
                     "type": "string",
