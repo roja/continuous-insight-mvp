@@ -243,7 +243,14 @@ class DeleteCustomCriteriaResponse(BaseModel):
     criteria_id: str
 
 class ParseEvidenceRequest(BaseRequestModel):
-    file_ids: List[str]
+    file_ids: Optional[List[str]] = None
+    text_content: Optional[str] = None
+
+    @field_validator('*')
+    def validate_not_both_empty(cls, v, info):
+        if info.data.get('file_ids') is None and info.data.get('text_content') is None:
+            raise ValueError("Either file_ids or text_content must be provided")
+        return v
 
 class UpdateCustomCriteriaRequest(BaseRequestModel):
     title: Optional[str] = None

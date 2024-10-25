@@ -427,7 +427,7 @@ async def parse_company_evidence(
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    """Parse specified evidence files for a company and extract relevant information"""
+    """Parse evidence files and/or direct text content for a company"""
     # Set up logging
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)
@@ -441,57 +441,81 @@ async def parse_company_evidence(
     if db_company.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    # Get current processed file IDs
-    processed_file_ids = db_company.processed_file_ids or []
-    logger.debug(f"Initial processed_file_ids: {processed_file_ids}")
+    # Initialize raw evidence if needed
+    if db_company.raw_evidence is None:
+        db_company.raw_evidence = ""
 
-    # Get all valid evidence files that haven't been parsed yet
-    evidence_files = (
-        db.query(EvidenceFileDB)
-        .join(AuditDB)
-        .filter(
-            EvidenceFileDB.id.in_(evidence_request.file_ids),
-            AuditDB.company_id == company_id,
-            EvidenceFileDB.status == "complete",
-            EvidenceFileDB.text_content != None,
-            ~EvidenceFileDB.id.in_(processed_file_ids if processed_file_ids else []),
+    # Process file IDs if provided
+    if evidence_request.file_ids:
+        processed_file_ids = db_company.processed_file_ids or []
+        logger.debug(f"Initial processed_file_ids: {processed_file_ids}")
+
+        # Get all valid evidence files that haven't been parsed yet
+        evidence_files = (
+            db.query(EvidenceFileDB)
+            .join(AuditDB)
+            .filter(
+                EvidenceFileDB.id.in_(evidence_request.file_ids),
+                AuditDB.company_id == company_id,
+                EvidenceFileDB.status == "complete",
+                EvidenceFileDB.text_content != None,
+                ~EvidenceFileDB.id.in_(processed_file_ids if processed_file_ids else []),
+            )
+            .all()
         )
-        .all()
-    )
 
-    logger.debug(f"Number of valid evidence files to process: {len(evidence_files)}")
+        logger.debug(f"Number of valid evidence files to process: {len(evidence_files)}")
 
-    if not evidence_files:
-        logger.debug("No new files to parse, proceeding to stage 2")
-        return process_raw_evidence(db_company, db)
-
-    # Stage 1: Parse each new evidence file
-    new_processed_file_ids = processed_file_ids.copy() if processed_file_ids else []
-    for file in evidence_files:
-        if not file.text_content:
-            logger.debug(f"Error parsing file {file.id} - no text contents")
-            continue
+        # Process each new evidence file
+        new_processed_file_ids = processed_file_ids.copy() if processed_file_ids else []
+        for file in evidence_files:
+            if not file.text_content:
+                logger.debug(f"Error parsing file {file.id} - no text contents")
+                continue
+                
+            parsed_content = parse_evidence_file(file.text_content, db_company.name, file.file_type)
+            parsed_content = (
+                "=== This is information gathered from the file "
+                + file.filename
+                + " ==="
+                + parsed_content
+            )
             
-        parsed_content = parse_evidence_file(file.text_content, db_company.name, file.file_type)
+            # Append to raw evidence with proper spacing
+            if db_company.raw_evidence:
+                db_company.raw_evidence += "\n\n" + parsed_content
+            else:
+                db_company.raw_evidence = parsed_content
+                
+            new_processed_file_ids.append(file.id)
+            logger.debug(f"Processed file ID appended: {file.id}")
+
+        # Update the processed_file_ids
+        db_company.processed_file_ids = new_processed_file_ids
+        logger.debug(f"Updated processed_file_ids: {db_company.processed_file_ids}")
+
+    # Process direct text content if provided
+    if evidence_request.text_content:
+        logger.debug("Processing direct text content")
+        parsed_content = parse_evidence_file(
+            evidence_request.text_content,
+            db_company.name,
+            "text"  # Default type for direct text input
+        )
         parsed_content = (
-            "=== This is information gathered from the file "
-            + file.filename
-            + " ==="
+            "=== This is information provided as direct text ==="
             + parsed_content
         )
+        
+        # Append to raw evidence with proper spacing
         if db_company.raw_evidence:
             db_company.raw_evidence += "\n\n" + parsed_content
         else:
             db_company.raw_evidence = parsed_content
-        new_processed_file_ids.append(file.id)
-        logger.debug(f"Processed file ID appended: {file.id}")
 
-    # Update the processed_file_ids
-    db_company.processed_file_ids = new_processed_file_ids
-    logger.debug(f"Updated processed_file_ids: {db_company.processed_file_ids}")
-
+    # Commit changes before processing
     db.commit()
     logger.debug("Changes committed to database")
 
-    # Stage 2: Process the accumulated raw evidence
+    # Process the accumulated raw evidence
     return process_raw_evidence(db_company, db)
