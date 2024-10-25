@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import List
@@ -54,3 +55,36 @@ async def list_user_companies(
     # Apply pagination
     companies = paginate_query(query, skip, limit).all()
     return companies
+
+@router.delete("/users/{user_id}", response_model=UserResponse)
+async def delete_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    """
+    Soft delete a user. Only admins can delete other users.
+    Users can delete their own account.
+    """
+    # Get the user to delete
+    user_to_delete = get_or_404(db, UserDB, user_id, "User not found")
+    
+    # Check permissions - users can only delete themselves
+    if current_user.id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to delete other users"
+        )
+    
+    # Implement soft delete
+    user_to_delete.deleted_at = datetime.now(timezone.utc)
+    
+    # Remove all company associations
+    db.query(UserCompanyAssociation).filter(
+        UserCompanyAssociation.user_id == user_id
+    ).delete()
+    
+    db.commit()
+    db.refresh(user_to_delete)
+    
+    return user_to_delete
