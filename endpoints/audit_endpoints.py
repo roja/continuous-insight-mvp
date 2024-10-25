@@ -68,7 +68,13 @@ async def get_audit(
     """
     Get details of a specific audit
     """
-    return verify_audit_access(db, audit_id, current_user)
+    db_audit = verify_audit_access(db, audit_id, current_user)
+    if db_audit.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audit not found"
+        )
+    return db_audit
 
 @router.delete("/audits/{audit_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_audit(
@@ -85,6 +91,12 @@ async def delete_audit(
 
     # Soft delete related evidence files
     current_time = datetime.now(timezone.utc)
+    
+    # Soft delete all related evidence files
+    db.query(EvidenceFileDB).filter(
+        EvidenceFileDB.audit_id == audit_id,
+        EvidenceFileDB.deleted_at.is_(None)
+    ).update({"deleted_at": current_time})
 
     # Soft delete the audit
     db_audit.deleted_at = current_time
