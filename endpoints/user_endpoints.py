@@ -18,10 +18,14 @@ async def get_current_user_details(
     """
     Get details about the currently authenticated user, including their company associations
     """
-    # Get user with associations
+    # Get user with associations, excluding soft-deleted companies
     user_with_associations = (
         db.query(UserDB)
-        .options(joinedload(UserDB.company_associations))
+        .options(
+            joinedload(UserDB.company_associations.and_(
+                CompanyDB.deleted_at.is_(None)
+            ))
+        )
         .filter(UserDB.id == current_user.id)
         .first()
     )
@@ -41,8 +45,8 @@ async def list_user_companies(
     """
     Get all companies the current user has access to with pagination
     """
-    # Build base query
-    query = db.query(CompanyDB)
+    # Build base query excluding soft-deleted companies
+    query = db.query(CompanyDB).filter(CompanyDB.deleted_at.is_(None))
     
     # Filter by user access
     query = filter_by_user_company_access(query, current_user)

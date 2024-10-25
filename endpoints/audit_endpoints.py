@@ -120,6 +120,10 @@ async def list_audits(
     """
     List all audits accessible to the current user
     """
-    query = db.query(AuditDB)
+    query = (
+        db.query(AuditDB)
+        .join(CompanyDB)
+        .filter(CompanyDB.deleted_at.is_(None))
+    )
     query = filter_by_user_company_access(query, current_user)
     return paginate_query(query, skip, limit).all()
