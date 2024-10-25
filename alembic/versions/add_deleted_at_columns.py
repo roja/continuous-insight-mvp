@@ -11,9 +11,9 @@ from datetime import timezone
 
 # revision identifiers, used by Alembic.
 revision = 'add_deleted_at_columns'
-down_revision = None  # Replace with your previous migration ID
+down_revision = 'be2af536c0ca'  # Replace with your previous migration ID
 branch_labels = None
-depends_on = None
+depends_on = 'be2af536c0ca'
 
 def upgrade() -> None:
     # Add deleted_at column to users table
