@@ -246,13 +246,11 @@ class ParseEvidenceRequest(BaseRequestModel):
     file_ids: Optional[List[str]] = None
     text_content: Optional[str] = None
 
-    @field_validator('file_ids', 'text_content')
+    @field_validator('text_content')
     @classmethod
-    def validate_not_both_empty(cls, v, info):
-        if info.field_name == 'text_content':
-            # Only validate when validating the second field
-            if info.data.get('file_ids') is None and info.data.get('text_content') is None:
-                raise ValueError("Either file_ids or text_content must be provided")
+    def validate_input_provided(cls, v, info):
+        if v is None and not info.data.get('file_ids'):
+            raise ValueError("Either file_ids or text_content must be provided")
         return v
 
 class UpdateCustomCriteriaRequest(BaseRequestModel):
