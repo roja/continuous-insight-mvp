@@ -368,6 +368,37 @@ async def update_company(
     return db_company
 
 
+@router.delete("/companies/{company_id}", status_code=204)
+async def delete_company(
+    request: Request,
+    company_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    """Delete a company (Global Admin only)"""
+    if not current_user.is_global_administrator:
+        raise HTTPException(
+            status_code=403,
+            detail="Only global administrators can delete companies"
+        )
+
+    # Get the company
+    company = get_or_404(db, CompanyDB, company_id, "Company not found")
+
+    # Delete all associated records
+    db.query(UserCompanyAssociation).filter(
+        UserCompanyAssociation.company_id == company_id
+    ).delete()
+    
+    db.query(AuditDB).filter(AuditDB.company_id == company_id).delete()
+    
+    # Delete the company itself
+    db.delete(company)
+    db.commit()
+
+    return Response(status_code=204)
+
+
 @router.post("/companies/{company_id}/evidence", response_model=CompanyResponse)
 @authorize_company_access(required_roles=[UserRole.AUDITOR])
 async def parse_company_evidence(
