@@ -4,13 +4,18 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_auth_requests
+from jose import JWTError
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from database import get_db
 from db_models import UserDB
 from pydantic_models import GoogleAuthRequest
 from auth import (
     oauth,
-    create_jwt_token,
+    create_access_token,
+    create_refresh_token,
+    verify_jwt_token,
+    auth_scheme,
     get_current_user,
 )
 
