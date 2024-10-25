@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from database import get_db
-from db_models import UserDB, UserRole, AuditDB, CompanyDB, EvidenceFileDB, CriteriaDB
+from db_models import UserDB, UserRole, AuditDB, CompanyDB, EvidenceFileDB, CriteriaDB, AuditCriteriaDB
 from helpers import (
     verify_company_access,
     verify_audit_access,
@@ -85,8 +85,8 @@ async def delete_audit(
     # Delete related evidence files
     db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id).delete()
 
-    # Delete related criteria
-    db.query(CriteriaDB).filter(CriteriaDB.audit_id == audit_id).delete()
+    # Delete related audit criteria associations
+    db.query(AuditCriteriaDB).filter(AuditCriteriaDB.audit_id == audit_id).delete()
 
     # Delete the audit
     db.delete(db_audit)
