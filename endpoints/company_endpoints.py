@@ -33,7 +33,11 @@ from pydantic_models import (
     ParseEvidenceRequest,
 )
 
-from helpers import parse_single_evidence_file, process_raw_evidence
+from helpers import  process_raw_evidence
+
+from llm_helpers import (
+    parse_evidence_file,
+)
 
 router = APIRouter(tags=["companies"])
 

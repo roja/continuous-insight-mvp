@@ -30,13 +30,10 @@ from db_models import (
 from pydantic_models import CompanyResponse
 from database import SessionLocal
 from llm_helpers import (
-    init_openai_client,
     analyze_image,
     transcribe_audio_chunk,
     extract_evidence_from_text,
-    generate_questions_using_llm,
     analyze_company_evidence,
-    parse_evidence_file,
 )
 
 T = TypeVar("T")
