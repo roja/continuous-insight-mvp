@@ -28,6 +28,7 @@ class UserRole(str, Enum):
 class TimestampMixin(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
 
 class IDMixin(BaseModel):
     id: str

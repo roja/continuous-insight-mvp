@@ -33,6 +33,7 @@ class UserDB(Base):
     is_global_administrator = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     company_associations = relationship(
         "UserCompanyAssociation", back_populates="user", overlaps="companies,users"
@@ -89,6 +90,7 @@ class AuditDB(Base):
     description = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     company = relationship("CompanyDB", back_populates="audits")
     audit_criteria = relationship("AuditCriteriaDB", back_populates="audit")
