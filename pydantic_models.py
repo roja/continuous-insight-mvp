@@ -92,6 +92,8 @@ class CompanyBase(BaseModel):
     @field_validator("size")
     def validate_size(cls, v):
         if isinstance(v, str):
+            if not v.strip():  # Handle empty strings
+                return None
             try:
                 return CompanySize(v.lower())
             except ValueError:
