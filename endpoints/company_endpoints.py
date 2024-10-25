@@ -170,7 +170,11 @@ async def list_companies(
     current_user: UserDB = Depends(get_current_user),
 ):
     """List all companies accessible to the current user"""
-    query = db.query(CompanyDB).select_from(CompanyDB)
+    query = (
+        db.query(CompanyDB)
+        .select_from(CompanyDB)
+        .filter(CompanyDB.deleted_at.is_(None))
+    )
     query = filter_by_user_company_access(query, current_user)
     return paginate_query(query, skip, limit).all()
 
@@ -184,7 +188,10 @@ async def get_company_detail(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get detailed information about a specific company"""
-    return verify_company_access(db, company_id, current_user)
+    company = verify_company_access(db, company_id, current_user)
+    if company.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return company
 
 
 @router.get("/companies/{company_id}/users", response_model=List[CompanyUserResponse])
@@ -383,7 +390,7 @@ async def delete_company(
             detail="Only global administrators can delete companies"
         )
 
-    # Get the company
+    # Get the company, including soft-deleted ones since we're in delete process
     company = get_or_404(db, CompanyDB, company_id, "Company not found")
 
     # Soft delete the company
