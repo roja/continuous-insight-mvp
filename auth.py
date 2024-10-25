@@ -35,16 +35,30 @@ oauth.register(
 auth_scheme = HTTPBearer()
 
 
-def create_jwt_token(data: dict) -> str:
+def create_access_token(data: dict) -> str:
     """
-    Create a new JWT token with the provided data and expiration time.
+    Create a new access token with the provided data and configurable expiration time.
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+    expire = datetime.utcnow() + timedelta(minutes=settings.jwt_access_token_expire_minutes)
+    to_encode.update({"exp": expire, "token_type": "access"})
     return jwt.encode(
         to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
     )
+
+def create_refresh_token(data: dict) -> str:
+    """
+    Create a new refresh token with the provided data and longer expiration time.
+    """
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=settings.jwt_refresh_token_expire_days)
+    to_encode.update({"exp": expire, "token_type": "refresh"})
+    return jwt.encode(
+        to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
+    )
+
+# Alias for backward compatibility
+create_jwt_token = create_access_token
 
 
 def verify_jwt_token(token: str) -> Optional[dict]:

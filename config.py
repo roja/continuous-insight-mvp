@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     apple_client_secret: str = "your_apple_client_secret"
     jwt_secret_key: str = "your_jwt_secret_key"
     jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60  # 1 hour default
+    jwt_refresh_token_expire_days: int = 7     # 7 days default
 
     model_config = SettingsConfigDict(env_file=".env")
 

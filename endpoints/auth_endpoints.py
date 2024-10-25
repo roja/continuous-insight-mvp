@@ -54,11 +54,13 @@ def get_or_create_user(db: Session, idinfo: Dict[str, Any]) -> UserDB:
     return user
 
 def create_auth_response(user: UserDB) -> Dict[str, Any]:
-    """Create standardized auth response with token and user info"""
-    access_token = create_jwt_token({"sub": user.id})
+    """Create standardized auth response with access and refresh tokens and user info"""
+    access_token = create_access_token({"sub": user.id})
+    refresh_token = create_refresh_token({"sub": user.id})
     
     return {
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {
             "id": user.id,
@@ -128,6 +130,42 @@ async def auth_google(auth_request: GoogleAuthRequest, db: Session = Depends(get
         print(f"Error in auth_google: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/auth/refresh")
+async def refresh_token(
+    auth: HTTPAuthorizationCredentials = Depends(auth_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Use a refresh token to get a new access token
+    """
+    try:
+        payload = verify_jwt_token(auth.credentials)
+        if not payload or payload.get("token_type") != "refresh":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token"
+            )
+        
+        user = db.query(UserDB).filter(UserDB.id == payload.get("sub")).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        # Create new access token
+        access_token = create_access_token({"sub": user.id})
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer"
+        }
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
 
 @router.get("/api/verify-token")
 async def verify_token(current_user: UserDB = Depends(get_current_user)):
