@@ -41,7 +41,8 @@ def get_or_create_user(db: Session, idinfo: Dict[str, Any]) -> UserDB:
     """Get existing user or create new one from Google OAuth info"""
     user = db.query(UserDB).filter(
         UserDB.oauth_id == idinfo["sub"],
-        UserDB.oauth_provider == "google"
+        UserDB.oauth_provider == "google",
+        UserDB.deleted_at.is_(None)
     ).first()
 
     if not user:

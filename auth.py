@@ -97,9 +97,16 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    user = db.query(UserDB).filter(UserDB.id == user_id).first()
+    user = db.query(UserDB).filter(
+        UserDB.id == user_id,
+        UserDB.deleted_at.is_(None)
+    ).first()
     if user is None:
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account has been deactivated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 
