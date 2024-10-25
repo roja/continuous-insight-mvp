@@ -206,11 +206,16 @@ async def list_company_users(
     # Verify access to company
     verify_company_access(db, company_id, current_user)
 
-    # Get all users associated with the company
+    # Get all users associated with the company, excluding soft-deleted users and companies
     users_with_roles = (
         db.query(UserDB, UserCompanyAssociation.role)
         .join(UserCompanyAssociation)
-        .filter(UserCompanyAssociation.company_id == company_id)
+        .join(CompanyDB)
+        .filter(
+            UserCompanyAssociation.company_id == company_id,
+            UserDB.deleted_at.is_(None),
+            CompanyDB.deleted_at.is_(None)
+        )
         .all()
     )
 
