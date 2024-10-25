@@ -2,8 +2,8 @@ import os
 import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool, MetaData, Table, inspect
+from sqlalchemy import create_engine
+from sqlalchemy import pool, inspect
 
 from alembic import context
 
@@ -11,9 +11,9 @@ from alembic import context
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Import models
-from db_models import Base, UserDB
+from db_models import Base
 
-# this is the Alembic Config object
+# This is the Alembic Config object
 config = context.config
 
 # Interpret the config file for Python logging
@@ -23,18 +23,12 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 def include_object(object, name, type_, reflected, compare_to):
-    """Customize which database objects get included in the autogenerate."""
-    print(f"Checking object: {name} (type: {type_})")
     return True
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
-    
-    # Debug info
     print(f"\nOffline mode - URL: {url}")
-    print(f"Tables in metadata: {list(target_metadata.tables.keys())}")
-    
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -44,23 +38,27 @@ def run_migrations_offline() -> None:
         compare_server_default=True,
         include_object=include_object,
     )
-
     with context.begin_transaction():
         context.run_migrations()
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    # Debug info
-    print("\nStarting online migration")
-    print(f"Tables in metadata: {list(target_metadata.tables.keys())}")
-    
-    configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = config.get_main_option("sqlalchemy.url")
-    
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
+    database_url = config.get_main_option("sqlalchemy.url")
+    if not database_url:
+        database_url = 'sqlite:///tech_audit.db'
+    print(f"\nUsing database URL: {database_url}")
+
+    # Print absolute path for SQLite database
+    if database_url.startswith("sqlite:///"):
+        db_file = database_url.replace("sqlite:///", "")
+        abs_db_path = os.path.abspath(db_file)
+        print(f"Using SQLite database file at: {abs_db_path}")
+
+    # Create the engine with isolation_level="AUTOCOMMIT"
+    connectable = create_engine(
+        database_url,
         poolclass=pool.NullPool,
+        isolation_level="AUTOCOMMIT",  # Add this line
     )
 
     with connectable.connect() as connection:
@@ -68,17 +66,21 @@ def run_migrations_online() -> None:
         inspector = inspect(connection)
         existing_tables = inspector.get_table_names()
         print(f"Existing tables in database: {existing_tables}")
-        
+
+        # Adjust Alembic configuration for SQLite
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,
             include_object=include_object,
+            render_as_batch=True,
+            transactional_ddl=False,        # Add this line
+            transaction_per_migration=False, # Add this line
         )
 
-        with context.begin_transaction():
-            context.run_migrations()
+        # Remove the 'with context.begin_transaction()' block
+        context.run_migrations()
 
 if context.is_offline_mode():
     run_migrations_offline()

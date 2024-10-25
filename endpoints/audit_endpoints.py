@@ -85,9 +85,6 @@ async def delete_audit(
 
     # Soft delete related evidence files
     current_time = datetime.now(timezone.utc)
-    db.query(EvidenceFileDB).filter(
-        EvidenceFileDB.audit_id == audit_id
-    ).update({"deleted_at": current_time})
 
     # Soft delete the audit
     db_audit.deleted_at = current_time
