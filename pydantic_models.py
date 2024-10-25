@@ -140,8 +140,9 @@ class AuditCreate(AuditBase, BaseRequestModel):
 class AuditResponse(AuditBase, BaseResponseModel, CompanyRelatedMixin):
     pass
 
-class AuditListResponse(AuditBase, BaseResponseModel):
-    pass
+class AuditListResponse(AuditBase, IDMixin):
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
 # Criteria Models
 class CriteriaBase(BaseModel):
