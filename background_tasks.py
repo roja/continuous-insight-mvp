@@ -58,7 +58,7 @@ async def process_company_evidence_task(
                 parsed_content = (
                     "=== This is information gathered from the file "
                     + file.filename
-                    + " ==="
+                    + " ===\n\n"
                     + parsed_content
                 )
                 
@@ -84,7 +84,7 @@ async def process_company_evidence_task(
                 "text"  # Default type for direct text input
             )
             parsed_content = (
-                "=== This is information provided as direct text ==="
+                "=== This is information provided as direct text ===\n\n"
                 + parsed_content
             )
             

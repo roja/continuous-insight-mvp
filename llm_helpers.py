@@ -334,18 +334,16 @@ def analyze_company_evidence(raw_evidence: str) -> dict:
 def parse_evidence_file(content: str, company_name: str, file_type: str) -> str:
     """Parse evidence file content for company information."""
     system_prompt = (
-        "Within the following content find company information based on the following areas. "
+        "Within the following content find specifc company information based on the following areas. "
         "If unable to determine high quality and accurate response from text then don't include that area of information in your response. "
-        "A description of the company. Approx 200 words which would enable someone with no knowledge of the company to understand the company "
-        "and what they do / are known for. It should focus on what the companies product / offering is rather than its technology or implementation "
-        "unless that is core to it's offering. "
+        "Details about what the company is known for, what they do. It should focus on what the companies product / offering is rather than its technology or implementation unless that is core to it's offering. "
         "The sector the company operates in. i.e. consumer electronics, financial markets... "
         "The size of the company (unknown, micro, small, medium, large). "
         "The type of business the company is. Is it a b2b, b2c maybe a mix of multiple. "
         "The main technologies used by the company and it's platforms. "
         "Areas of focus of the company. The markets it focuses on i.e education, consumer, finance, entertainment "
         "and the types of business it does i.e. product manufacture, software development... "
-        f"The company is called {company_name} and the file your extracting data from is a {file_type}"
+        f"The company is called {company_name} and the file your extracting data from is a {file_type} - remember to only include accurate information and never."
     )
 
     try:

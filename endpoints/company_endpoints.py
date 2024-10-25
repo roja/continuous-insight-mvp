@@ -33,8 +33,6 @@ from pydantic_models import (
     ParseEvidenceRequest,
 )
 
-from helpers import  process_raw_evidence
-
 from llm_helpers import (
     parse_evidence_file,
 )
