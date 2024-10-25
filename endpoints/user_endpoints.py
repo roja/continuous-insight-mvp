@@ -19,7 +19,7 @@ async def get_current_user_details(
     """
     Get details about the currently authenticated user, including their company associations
     """
-    # Get user with associations, excluding soft-deleted companies
+    # Get user with associations, excluding soft-deleted companies and users
     user_with_associations = (
         db.query(UserDB)
         .options(
@@ -27,7 +27,10 @@ async def get_current_user_details(
                 CompanyDB.deleted_at.is_(None)
             ))
         )
-        .filter(UserDB.id == current_user.id)
+        .filter(
+            UserDB.id == current_user.id,
+            UserDB.deleted_at.is_(None)
+        )
         .first()
     )
     
