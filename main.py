@@ -9,7 +9,7 @@ from db_models import Base
 from database import engine
 from config import settings
 from middleware import setup_middleware
-from helpers import init_openai_client
+from llm_helpers import init_openai_client
 from endpoints import (
     auth_endpoints,
     company_endpoints,
