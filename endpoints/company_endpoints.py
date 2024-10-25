@@ -439,13 +439,17 @@ async def parse_company_evidence(
     if db_company.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Company not found")
 
+    # Check if both fields are empty
+    is_empty_request = (not evidence_request.file_ids or len(evidence_request.file_ids) == 0) and (not evidence_request.text_content or len(evidence_request.text_content.strip()) == 0)
+
     # Add the processing task to background tasks
     background_tasks.add_task(
         process_company_evidence_task,
         db=db,
         company_id=company_id,
-        file_ids=evidence_request.file_ids,
-        text_content=evidence_request.text_content
+        file_ids=evidence_request.file_ids if not is_empty_request else None,
+        text_content=evidence_request.text_content if not is_empty_request else None,
+        reprocess_only=is_empty_request
     )
 
     return {"message": "Evidence processing started", "company_id": company_id}

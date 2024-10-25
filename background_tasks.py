@@ -11,7 +11,8 @@ async def process_company_evidence_task(
     db: Session,
     company_id: str,
     file_ids: list[str] | None = None,
-    text_content: str | None = None
+    text_content: str | None = None,
+    reprocess_only: bool = False
 ) -> None:
     """Background task to process company evidence"""
     try:
@@ -93,10 +94,20 @@ async def process_company_evidence_task(
             else:
                 db_company.raw_evidence = parsed_content
 
-        # Process the accumulated raw evidence
-        process_raw_evidence(db_company, db)
-        db.commit()
-        logger.debug("Evidence processing completed successfully")
+        # If this is a reprocess-only request, skip the raw evidence accumulation
+        if not reprocess_only:
+            # Process the accumulated raw evidence
+            process_raw_evidence(db_company, db)
+            db.commit()
+            logger.debug("Evidence processing completed successfully")
+        else:
+            # Just reprocess existing raw evidence
+            if db_company.raw_evidence:
+                process_raw_evidence(db_company, db)
+                db.commit()
+                logger.debug("Raw evidence reprocessing completed successfully")
+            else:
+                logger.debug("No raw evidence to reprocess")
 
     except Exception as e:
         logger.error(f"Error processing evidence: {str(e)}")
