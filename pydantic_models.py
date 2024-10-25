@@ -182,10 +182,14 @@ class EvidenceResponse(EvidenceBase, BaseResponseModel, AuditRelatedMixin):
     evidence_type: str
     start_position: Optional[int] = None
 
-class EvidenceFileResponse(BaseResponseModel, AuditRelatedMixin):
+class EvidenceFileResponse(IDMixin, AuditRelatedMixin):
     filename: str
     file_type: str
     status: str
+    uploaded_at: datetime
+    processed_at: Optional[datetime] = None
+    
+    model_config = ConfigDict(from_attributes=True)
 
 # Question and Answer Models
 class QuestionBase(BaseModel):
