@@ -139,5 +139,6 @@ async def verify_token(current_user: UserDB = Depends(get_current_user)):
             "id": current_user.id,
             "email": current_user.email,
             "name": current_user.name,
+            "is_global_administrator": current_user.is_global_administrator,
         }
     }
