@@ -38,6 +38,14 @@ async def upload_evidence_file(
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     """Upload a new evidence file for an audit"""
+    # Verify audit exists and isn't deleted
+    audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
+    if audit.deleted_at is not None:
+        raise HTTPException(
+            status_code=404,
+            detail="Audit not found"
+        )
+
     # Create directory for evidence files if it doesn't exist
     evidence_dir = "evidence_files"
     os.makedirs(evidence_dir, exist_ok=True)
