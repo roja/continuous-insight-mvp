@@ -23,7 +23,7 @@ router = APIRouter(tags=["audits"])
 
 @router.post("/audits", response_model=AuditResponse)
 @authorize_company_access(required_roles=[UserRole.AUDITOR])
-def create_audit(
+async def create_audit(
     request: Request,
     audit: AuditCreate,
     db: Session = Depends(get_db),
