@@ -126,8 +126,9 @@ async def list_audits(
         .join(CompanyDB)
         .filter(
             CompanyDB.deleted_at.is_(None),
-            AuditDB.deleted_at.is_(None)
+            AuditDB.deleted_at.is_(None)  # This ensures we only get non-deleted audits
         )
+        .order_by(AuditDB.created_at.desc())
     )
     query = filter_by_user_company_access(query, current_user)
     return paginate_query(query, skip, limit).all()
