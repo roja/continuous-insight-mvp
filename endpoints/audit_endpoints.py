@@ -89,17 +89,8 @@ async def delete_audit(
     required_roles = [UserRole.AUDITOR, UserRole.ORGANISATION_LEAD]
     db_audit = verify_audit_access(db, audit_id, current_user, required_roles)
 
-    # Soft delete related evidence files
-    current_time = datetime.now(timezone.utc)
-    
-    # Soft delete all related evidence files
-    db.query(EvidenceFileDB).filter(
-        EvidenceFileDB.audit_id == audit_id,
-        EvidenceFileDB.deleted_at.is_(None)
-    ).update({"deleted_at": current_time})
-
     # Soft delete the audit
-    db_audit.deleted_at = current_time
+    db_audit.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
     return {"message": "Audit and related data deleted successfully"}
