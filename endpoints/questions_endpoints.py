@@ -20,11 +20,11 @@ from pydantic_models import (
     AnswerResponse,
 )
 from helpers import (
-    generate_questions_using_llm,
     verify_audit_access,
     get_or_404,
     paginate_query,
 )
+from llm_helpers import generate_questions_using_llm
 
 router = APIRouter(tags=["questions"])
 
