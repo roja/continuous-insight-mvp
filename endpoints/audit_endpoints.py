@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Request, status, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
@@ -82,14 +83,14 @@ async def delete_audit(
     required_roles = [UserRole.AUDITOR, UserRole.ORGANISATION_LEAD]
     db_audit = verify_audit_access(db, audit_id, current_user, required_roles)
 
-    # Delete related evidence files
-    db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id).delete()
+    # Soft delete related evidence files
+    current_time = datetime.now(timezone.utc)
+    db.query(EvidenceFileDB).filter(
+        EvidenceFileDB.audit_id == audit_id
+    ).update({"deleted_at": current_time})
 
-    # Delete related audit criteria associations
-    db.query(AuditCriteriaDB).filter(AuditCriteriaDB.audit_id == audit_id).delete()
-
-    # Delete the audit
-    db.delete(db_audit)
+    # Soft delete the audit
+    db_audit.deleted_at = current_time
     db.commit()
 
     return {"message": "Audit and related data deleted successfully"}
@@ -123,7 +124,10 @@ async def list_audits(
     query = (
         db.query(AuditDB)
         .join(CompanyDB)
-        .filter(CompanyDB.deleted_at.is_(None))
+        .filter(
+            CompanyDB.deleted_at.is_(None),
+            AuditDB.deleted_at.is_(None)
+        )
     )
     query = filter_by_user_company_access(query, current_user)
     return paginate_query(query, skip, limit).all()
