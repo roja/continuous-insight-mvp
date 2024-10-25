@@ -84,12 +84,12 @@ class CompanyBase(BaseModel):
     name: str = Field(..., min_length=1)
     description: Optional[str] = None
     sector: Optional[str] = None
-    size: Optional[CompanySize] = None
+    size: Optional[CompanySize] = Field(default=None, validate_default=True)
     business_type: Optional[str] = None
     technology_stack: Optional[str] = None
     areas_of_focus: Optional[List[str]] = None
 
-    @field_validator("size")
+    @field_validator("size", mode="before")
     def validate_size(cls, v):
         if isinstance(v, str):
             if not v.strip():  # Handle empty strings
