@@ -245,8 +245,15 @@ async def list_company_audits(
     # Verify access to company
     verify_company_access(db, company_id, current_user)
 
-    # Query audits associated with the company
-    query = db.query(AuditDB).filter(AuditDB.company_id == company_id).order_by(AuditDB.created_at.desc())
+    # Query audits associated with the company, excluding soft-deleted ones
+    query = (
+        db.query(AuditDB)
+        .filter(
+            AuditDB.company_id == company_id,
+            AuditDB.deleted_at.is_(None)
+        )
+        .order_by(AuditDB.created_at.desc())
+    )
     audits = paginate_query(query, skip, limit).all()
 
     return audits
