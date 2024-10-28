@@ -1,74 +1,194 @@
 {
     "COMPANY_SIZES": [
         {
+            "value": "unknown",
+            "label": "Unknown",
+            "description": "Company size is not known or cannot be determined"
+        },
+        {
             "value": "micro",
-            "label": "Micro Enterprise",
-            "description": "1-9 employees, typically local or startup businesses"
+            "label": "Micro",
+            "description": "Less than 10 employees OR annual revenue under $2 million"
         },
         {
             "value": "small",
-            "label": "Small Enterprise",
-            "description": "10-49 employees, established local or regional presence"
+            "label": "Small",
+            "description": "10-49 employees OR annual revenue between $2-10 million"
         },
         {
             "value": "medium",
-            "label": "Medium Enterprise",
-            "description": "50-249 employees, significant regional or national operations"
+            "label": "Medium",
+            "description": "50-249 employees OR annual revenue between $10-50 million"
         },
         {
             "value": "large",
-            "label": "Large Enterprise",
-            "description": "250+ employees, major national or multinational operations"
+            "label": "Large",
+            "description": "250-999 employees OR annual revenue between $50-250 million"
+        },
+        {
+            "value": "enterprise",
+            "label": "Enterprise",
+            "description": "1000+ employees OR annual revenue exceeding $250 million"
         }
     ],
     "BUSINESS_SECTORS": [
         {
-            "value": "technology",
-            "label": "Technology & Software",
-            "description": "IT services, software development, digital solutions"
+            "value": "unknown",
+            "label": "Unknown",
+            "description": "Sector is not known or cannot be determined"
         },
         {
-            "value": "financial",
-            "label": "Financial Services",
-            "description": "Banking, insurance, investment, and fintech"
+            "value": "aerospace_defense",
+            "label": "Aerospace & Defense",
+            "description": "Aircraft, defense systems, space technology manufacturing"
         },
         {
-            "value": "healthcare",
+            "value": "agriculture",
+            "label": "Agriculture",
+            "description": "Farming, agricultural technology, crop production"
+        },
+        {
+            "value": "automotive",
+            "label": "Automotive",
+            "description": "Vehicle manufacturing, auto parts, mobility solutions"
+        },
+        {
+            "value": "banking_finance",
+            "label": "Banking & Finance",
+            "description": "Banking, investment services, financial technology"
+        },
+        {
+            "value": "biotechnology",
+            "label": "Biotechnology",
+            "description": "Biotech research, development, and applications"
+        },
+        {
+            "value": "chemical_industry",
+            "label": "Chemical Industry",
+            "description": "Chemical manufacturing, processing, and distribution"
+        },
+        {
+            "value": "consumer_electronics",
+            "label": "Consumer Electronics",
+            "description": "Electronic devices, gadgets, consumer technology"
+        },
+        {
+            "value": "construction_engineering",
+            "label": "Construction & Engineering",
+            "description": "Building construction, engineering services, infrastructure"
+        },
+        {
+            "value": "education_services",
+            "label": "Education Services",
+            "description": "Educational institutions, training, EdTech solutions"
+        },
+        {
+            "value": "energy_utilities",
+            "label": "Energy & Utilities",
+            "description": "Power generation, utilities, renewable energy"
+        },
+        {
+            "value": "entertainment_media",
+            "label": "Entertainment & Media",
+            "description": "Digital media, entertainment, publishing, broadcasting"
+        },
+        {
+            "value": "environmental_services",
+            "label": "Environmental Services",
+            "description": "Environmental consulting, conservation, sustainability"
+        },
+        {
+            "value": "food_beverage",
+            "label": "Food & Beverage",
+            "description": "Food production, processing, distribution services"
+        },
+        {
+            "value": "healthcare_medical",
             "label": "Healthcare & Medical",
             "description": "Medical services, healthcare technology, pharmaceuticals"
         },
         {
-            "value": "retail",
-            "label": "Retail & E-commerce",
-            "description": "Online and physical retail, consumer goods distribution"
+            "value": "hospitality_tourism",
+            "label": "Hospitality & Tourism",
+            "description": "Hotels, tourism services, hospitality management"
         },
         {
-            "value": "manufacturing",
-            "label": "Manufacturing & Industrial",
-            "description": "Production, assembly, industrial processes"
+            "value": "industrial_manufacturing",
+            "label": "Industrial Manufacturing",
+            "description": "Manufacturing, production, industrial processes"
         },
         {
-            "value": "education",
-            "label": "Education",
-            "description": "Educational institutions, EdTech, training services"
+            "value": "information_technology",
+            "label": "Information Technology",
+            "description": "IT services, software development, digital solutions"
+        },
+        {
+            "value": "insurance_services",
+            "label": "Insurance Services",
+            "description": "Insurance products, risk management, coverage solutions"
+        },
+        {
+            "value": "legal_services",
+            "label": "Legal Services",
+            "description": "Legal consulting, law practices, compliance services"
+        },
+        {
+            "value": "logistics_transport",
+            "label": "Logistics & Transport",
+            "description": "Transportation, logistics, supply chain management"
+        },
+        {
+            "value": "mining_resources",
+            "label": "Mining & Resources",
+            "description": "Resource extraction, mining operations, minerals"
+        },
+        {
+            "value": "pharmaceuticals",
+            "label": "Pharmaceuticals",
+            "description": "Drug development, pharmaceutical manufacturing"
         },
         {
             "value": "professional_services",
             "label": "Professional Services",
-            "description": "Consulting, legal, accounting, business services"
+            "description": "Consulting, business services, professional advisory"
         },
         {
-            "value": "media",
-            "label": "Media & Entertainment",
-            "description": "Digital media, entertainment, publishing, broadcasting"
+            "value": "public_sector",
+            "label": "Public Sector",
+            "description": "Government services, public administration"
         },
         {
-            "value": "energy",
-            "label": "Energy & Utilities",
-            "description": "Power generation, utilities, renewable energy"
+            "value": "real_estate_property",
+            "label": "Real Estate & Property",
+            "description": "Property management, real estate development"
+        },
+        {
+            "value": "retail_commerce",
+            "label": "Retail & Commerce",
+            "description": "Retail operations, e-commerce, consumer goods"
+        },
+        {
+            "value": "telecommunications",
+            "label": "Telecommunications",
+            "description": "Communication services, network infrastructure"
+        },
+        {
+            "value": "textiles_apparel",
+            "label": "Textiles & Apparel",
+            "description": "Clothing manufacturing, textile production"
+        },
+        {
+            "value": "waste_management",
+            "label": "Waste Management",
+            "description": "Waste processing, recycling, disposal services"
         }
     ],
     "BUSINESS_TYPES": [
+        {
+            "value": "unknown",
+            "label": "Unknown",
+            "description": "Business type is not known or cannot be determined"
+        },
         {
             "value": "b2b",
             "label": "B2B (Business to Business)",
@@ -85,19 +205,59 @@
             "description": "Serving businesses that serve consumers"
         },
         {
+            "value": "b2g",
+            "label": "B2G (Business to Government)",
+            "description": "Products or services sold to government entities"
+        },
+        {
+            "value": "c2c",
+            "label": "C2C (Consumer to Consumer)",
+            "description": "Platform enabling consumer-to-consumer transactions"
+        },
+        {
+            "value": "g2b",
+            "label": "G2B (Government to Business)",
+            "description": "Government services provided to businesses"
+        },
+        {
+            "value": "g2c",
+            "label": "G2C (Government to Consumer)",
+            "description": "Government services provided to citizens"
+        },
+        {
+            "value": "p2p",
+            "label": "P2P (Peer to Peer)",
+            "description": "Direct peer-to-peer transactions or services"
+        },
+        {
             "value": "nonprofit",
             "label": "Non-Profit Organization",
             "description": "Organization that uses profits for charitable purposes"
         },
         {
-            "value": "charity",
-            "label": "Charity",
-            "description": "Organization focused on charitable causes and social impact"
+            "value": "public_institution",
+            "label": "Public Institution",
+            "description": "Government-owned or public service institution"
         },
         {
-            "value": "education",
-            "label": "Educational Institution",
-            "description": "Schools, universities, and educational services"
+            "value": "cooperative",
+            "label": "Cooperative",
+            "description": "Member-owned and operated business structure"
+        },
+        {
+            "value": "social_enterprise",
+            "label": "Social Enterprise",
+            "description": "Business with primary social or environmental objectives"
+        },
+        {
+            "value": "state_owned",
+            "label": "State-Owned Enterprise",
+            "description": "Government-owned commercial organization"
+        },
+        {
+            "value": "ppp",
+            "label": "Public-Private Partnership",
+            "description": "Collaboration between government and private sector"
         }
     ],
     "EXAMPLE_COMPANY": {

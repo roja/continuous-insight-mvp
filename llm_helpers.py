@@ -265,6 +265,12 @@ def generate_questions_using_llm(
 
 def analyze_company_evidence(raw_evidence: str) -> dict:
     """Analyse company evidence using LLM and return structured information."""
+    import json
+
+    # Load constants from constants.json
+    with open("constants.json") as f:
+        constants = json.load(f)
+
     company_info_function = {
         "name": "extract_company_info",
         "description": "Extracts company information from the provided text. Response should be 'unknown' if unable to determine high quality and accurate response from text. Always use british english.",
@@ -280,32 +286,21 @@ def analyze_company_evidence(raw_evidence: str) -> dict:
                 "sector": {
                     "type": "string",
                     "description": "Primary economic sector categorized according to GICS (Global Industry Classification Standard) and NACE (Statistical Classification of Economic Activities). Select the highest level sector that represents the company's main business activity. For diversified businesses, select the sector generating the largest revenue. Note: More specific business activities should be captured in 'areas_of_focus'.",
+                    "enum": [
+                        sector["value"] for sector in constants["BUSINESS_SECTORS"]
+                    ],
                 },
                 "size": {
                     "type": "string",
                     "description": "Company size classification. Select: MICRO (<10 employees OR <$2M revenue), SMALL (10-49 employees OR $2-10M revenue), MEDIUM (50-249 employees OR $10-50M revenue), LARGE (250-999 employees OR $50-250M revenue), or ENTERPRISE (1000+ employees OR >$250M revenue).",
-                    "enum": ["Micro", "Small", "Medium", "Large", "Enterprise"],
+                    "enum": [size["value"] for size in constants["COMPANY_SIZES"]],
                 },
                 "business_type": {
                     "type": "string",
                     "description": "The type of business (B2B, B2C, etc.).",
                     "enum": [
-                        "Unknown",
-                        "B2B",
-                        "B2C",
-                        "B2B2C",
-                        "B2G",
-                        "C2C",
-                        "G2B",
-                        "G2C",
-                        "P2P",
-                        "Non-Profit Organisation",
-                        "Public Institution",
-                        "Cooperative",
-                        "Social Enterprise",
-                        "State-Owned Enterprise",
-                        "Public-Private Partnership",
-                        "Other",
+                        business_type["value"]
+                        for business_type in constants["BUSINESS_TYPES"]
                     ],
                 },
                 "technology_stack": {
