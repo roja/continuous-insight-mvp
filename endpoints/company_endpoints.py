@@ -58,7 +58,7 @@ def load_constants():
         return json.load(f)
 
 
-@router.get("/constants")
+@router.get("/companies/constants")
 async def get_constants():
     """Return the application constants"""
     return load_constants()
