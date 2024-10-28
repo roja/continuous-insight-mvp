@@ -1,7 +1,18 @@
 import logging
 from datetime import datetime, timezone
+import json
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query, Response, status, BackgroundTasks
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Query,
+    Response,
+    status,
+    BackgroundTasks,
+)
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -39,6 +50,18 @@ from llm_helpers import (
 from background_tasks import process_company_evidence_task
 
 router = APIRouter(tags=["companies"])
+
+
+def load_constants():
+    constants_path = Path(__file__).parent.parent / "constants.json"
+    with open(constants_path, "r") as f:
+        return json.load(f)
+
+
+@router.get("/constants")
+async def get_constants():
+    """Return the application constants"""
+    return load_constants()
 
 
 @router.post(
@@ -217,7 +240,7 @@ async def list_company_users(
         .filter(
             UserCompanyAssociation.company_id == company_id,
             UserDB.deleted_at.is_(None),
-            CompanyDB.deleted_at.is_(None)
+            CompanyDB.deleted_at.is_(None),
         )
         .all()
     )
@@ -251,10 +274,7 @@ async def list_company_audits(
     # Query audits associated with the company, excluding soft-deleted ones
     query = (
         db.query(AuditDB)
-        .filter(
-            AuditDB.company_id == company_id,
-            AuditDB.deleted_at.is_(None)
-        )
+        .filter(AuditDB.company_id == company_id, AuditDB.deleted_at.is_(None))
         .order_by(AuditDB.created_at.desc())
     )
     audits = paginate_query(query, skip, limit).all()
@@ -292,7 +312,7 @@ async def update_user_role(
         .filter(
             UserCompanyAssociation.user_id == user_id,
             UserCompanyAssociation.company_id == company_id,
-            CompanyDB.deleted_at.is_(None)
+            CompanyDB.deleted_at.is_(None),
         )
         .first()
     )
@@ -341,8 +361,7 @@ async def create_company(
     """Create a new company (Global Admin only)"""
     if not current_user.is_global_administrator:
         raise HTTPException(
-            status_code=403,
-            detail="Only global administrators can create companies"
+            status_code=403, detail="Only global administrators can create companies"
         )
 
     # Convert Pydantic model to dict and handle special fields
@@ -361,7 +380,7 @@ async def create_company(
     # Convert areas_of_focus back to list for response
     if db_company.areas_of_focus:
         db_company.areas_of_focus = db_company.areas_of_focus.split(",")
-    
+
     return db_company
 
 
@@ -403,8 +422,7 @@ async def delete_company(
     """Delete a company (Global Admin only)"""
     if not current_user.is_global_administrator:
         raise HTTPException(
-            status_code=403,
-            detail="Only global administrators can delete companies"
+            status_code=403, detail="Only global administrators can delete companies"
         )
 
     # Get the company, including soft-deleted ones since we're in delete process
@@ -438,7 +456,12 @@ async def parse_company_evidence(
         raise HTTPException(status_code=404, detail="Company not found")
 
     # Check if both fields are empty
-    is_empty_request = (not evidence_request.file_ids or len(evidence_request.file_ids) == 0) and (not evidence_request.text_content or len(evidence_request.text_content.strip()) == 0)
+    is_empty_request = (
+        not evidence_request.file_ids or len(evidence_request.file_ids) == 0
+    ) and (
+        not evidence_request.text_content
+        or len(evidence_request.text_content.strip()) == 0
+    )
 
     # Add the processing task to background tasks
     background_tasks.add_task(
@@ -447,7 +470,7 @@ async def parse_company_evidence(
         company_id=company_id,
         file_ids=evidence_request.file_ids if not is_empty_request else None,
         text_content=evidence_request.text_content if not is_empty_request else None,
-        reprocess_only=is_empty_request
+        reprocess_only=is_empty_request,
     )
 
     return {"message": "Evidence processing started", "company_id": company_id}

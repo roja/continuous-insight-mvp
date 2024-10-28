@@ -11,19 +11,19 @@ import time
 from openai import OpenAI
 from db_models import CriteriaDB
 
-# Initialize OpenAI client
+# Initialise OpenAI client
 openai_client = None
 
 
 def init_openai_client(api_key: str):
-    """Initialize the OpenAI client with the provided API key."""
+    """Initialise the OpenAI client with the provided API key."""
     global openai_client
     openai_client = OpenAI(api_key=api_key)
 
 
 def analyze_image(image_path: str) -> Optional[str]:
     """
-    Analyze image content using OpenAI's API.
+    Analyse image content using OpenAI's API.
     Returns a description of the image content or None if irrelevant/error.
     """
     max_retries = 3
@@ -63,7 +63,7 @@ def analyze_image(image_path: str) -> Optional[str]:
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Analyze this image for our technical and product audit. If it's irrelevant (like a logo or unrelated picture), respond with 'irrelevant'. Otherwise, provide a detailed description of the content, especially if it's a system screenshot, architecture diagram, process chart, or documentation. Focus on factual information without assessing maturity.",
+                                "text": "Analyse this image for our technical and product audit. If it's irrelevant (like a logo or unrelated picture), respond with 'irrelevant'. Otherwise, provide a detailed description of the content, especially if it's a system screenshot, architecture diagram, process chart, or documentation. Focus on factual information without assessing maturity.",
                             },
                             {
                                 "type": "image_url",
@@ -84,12 +84,12 @@ def analyze_image(image_path: str) -> Optional[str]:
                 return description if description != "irrelevant" else None
 
         except Exception as e:
-            print(f"Error analyzing image, attempt {attempt + 1}: {str(e)}")
+            print(f"Error analysing image, attempt {attempt + 1}: {str(e)}")
             if attempt < max_retries - 1:
                 print(f"Retrying in {retry_delay} seconds...")
                 time.sleep(retry_delay)
             else:
-                print(f"Failed to analyze image after {max_retries} attempts.")
+                print(f"Failed to analyse image after {max_retries} attempts.")
                 return None
 
     return None
@@ -115,7 +115,7 @@ def extract_evidence_from_text(
     system_prompt = (
         "You are an expert auditor tasked with extracting relevant evidence from documents based on specific criteria. Always use british english. "
         "Given the criteria and a document, extract and return a summary and relevant quotes or references from the document that pertain to the criteria. "
-        "The summary should be a concise overview of the relevant content, and the quotes should be sentences to paragraphs in length that help an expert auditor assess the maturity of the organization's technology and product functions. "
+        "The summary should be a concise overview of the relevant content, and the quotes should be sentences to paragraphs in length that help an expert auditor assess the maturity of the organisation's technology and product functions. "
         "Provide the output in a structured JSON format as per the function schema."
     )
 
@@ -193,7 +193,7 @@ def generate_questions_using_llm(
 ) -> List[str]:
     """Generate questions based on criteria and evidence using LLM."""
     system_prompt = (
-        "You are an expert auditor tasked with assessing the maturity of an organization's technical and product departments based on specific criteria and available evidence. Always use british english. "
+        "You are an expert auditor tasked with assessing the maturity of an organisation's technical and product departments based on specific criteria and available evidence. Always use british english. "
         "Your goal is to determine whether the current evidence is sufficient to assess the maturity level. "
         "If the evidence is sufficient, generate additional questions to dig deeper into the most relevant areas of the current evidence. "
         "If the evidence is not sufficient, generate questions that would fill the gaps in knowledge needed for maturity assessment."
@@ -264,7 +264,7 @@ def generate_questions_using_llm(
 
 
 def analyze_company_evidence(raw_evidence: str) -> dict:
-    """Analyze company evidence using LLM and return structured information."""
+    """Analyse company evidence using LLM and return structured information."""
     company_info_function = {
         "name": "extract_company_info",
         "description": "Extracts company information from the provided text. Response should be 'unknown' if unable to determine high quality and accurate response from text. Always use british english.",
@@ -273,30 +273,49 @@ def analyze_company_evidence(raw_evidence: str) -> dict:
             "properties": {
                 "description": {
                     "type": "string",
-                    "description": "A description of the company focusing on its product/offering (approx. 200 words). Always use british english.",
+                    "description": "Provide a comprehensive overview (100-200 words) of the company's core products, services and value proposition. Structure as follows: (1) Main offering and primary market position (2) Key products/services with their distinctive features (3) Primary customer benefits and problems solved (4) Unique technological or operational capabilities (5) Target customer segments. Use present tense, active voice and British English spelling. Focus on factual information rather than marketing language. Examples of preferred style: 'provides' not 'is a leading provider of', 'specialises in' not 'is passionate about', 'develops' not 'is revolutionising'. Avoid buzzwords, superlatives and unsubstantiated claims.",
+                    "minLength": 100,
+                    "maxLength": 200,
                 },
                 "sector": {
                     "type": "string",
-                    "description": "The sector the company operates in. i.e. consumer electronics, financial markets... max 2 words.",
+                    "description": "Primary economic sector categorized according to GICS (Global Industry Classification Standard) and NACE (Statistical Classification of Economic Activities). Select the highest level sector that represents the company's main business activity. For diversified businesses, select the sector generating the largest revenue. Note: More specific business activities should be captured in 'areas_of_focus'.",
                 },
                 "size": {
                     "type": "string",
-                    "description": "Company size category based on employees and revenue.",
-                    "enum": ["unknown", "micro", "small", "medium", "large"],
+                    "description": "Company size classification. Select: MICRO (<10 employees OR <$2M revenue), SMALL (10-49 employees OR $2-10M revenue), MEDIUM (50-249 employees OR $10-50M revenue), LARGE (250-999 employees OR $50-250M revenue), or ENTERPRISE (1000+ employees OR >$250M revenue).",
+                    "enum": ["Micro", "Small", "Medium", "Large", "Enterprise"],
                 },
                 "business_type": {
                     "type": "string",
                     "description": "The type of business (B2B, B2C, etc.).",
-                    "enum": ["unknown", "B2B", "B2C", "B2B2C", "E2E", "Education", "Charity", "Public Sector", "Other"], 
+                    "enum": [
+                        "Unknown",
+                        "B2B",
+                        "B2C",
+                        "B2B2C",
+                        "B2G",
+                        "C2C",
+                        "G2B",
+                        "G2C",
+                        "P2P",
+                        "Non-Profit Organisation",
+                        "Public Institution",
+                        "Cooperative",
+                        "Social Enterprise",
+                        "State-Owned Enterprise",
+                        "Public-Private Partnership",
+                        "Other",
+                    ],
                 },
                 "technology_stack": {
                     "type": "string",
-                    "description": "Main technologies used by the company.",
+                    "description": "List the key technology components used across the organisation's software systems and operations. Include: (1) Data Storage & Processing: databases, data warehouses, caching systems, message queues (2) Backend Technologies: web frameworks, API technologies, runtime environments (3) Frontend Technologies: UI frameworks, state management, build tools (4) Mobile Development: cross-platform frameworks, native development kits (5) Infrastructure: cloud platforms, containerisation, CI/CD tools (6) Security: identity management, encryption tools, security scanning (7) Monitoring & Observability: logging, metrics, tracing tools (8) Development Tools: version control, IDEs, testing frameworks (9) Key Enterprise SaaS: CRM, ERP, collaboration tools, productivity suites (10) Integration & Communication: messaging systems, API gateways, ETL tools (11) AI/ML Tools: machine learning frameworks, model serving platforms (12) Content Management: CMS, DAM, documentation tools.",
                 },
                 "areas_of_focus": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Markets and business areas the company focuses on.",
+                    "description": "Primary market segments, sectors, and specialised domains the company serves or operates in. Include both industry sectors (e.g., Healthcare, Education) and business functions (e.g., HR Tech, Supply Chain). Each focus should be a concise 1-2 word term. Examples: Healthcare, EdTech, Legal Services, Supply Chain, Data Analytics, Digital Marketing, FinTech, Sports Management, Retail Tech, Manufacturing, Public Sector, HR Tech, Construction, Media Entertainment, Professional Services, DevOps, Cybersecurity, E-commerce, AgriTech, CleanTech, BioTech, PropTech.",
                 },
             },
             "required": [
@@ -328,14 +347,14 @@ def analyze_company_evidence(raw_evidence: str) -> dict:
         return json.loads(function_call.arguments)
 
     except Exception as e:
-        print(f"Error analyzing company evidence: {str(e)}")
+        print(f"Error analysing company evidence: {str(e)}")
         return {}
 
 
 def parse_evidence_file(content: str, company_name: str, file_type: str) -> str:
     """Parse evidence file content for company information."""
     system_prompt = (
-        "Within the following content find specifc company information based on the following areas. "
+        "Within the following content find specific company information based on the following areas. "
         "If unable to determine high quality and accurate response from text then don't include that area of information in your response. "
         "Details about what the company is known for, what they do. It should focus on what the companies product / offering is rather than its technology or implementation unless that is core to it's offering. "
         "The sector the company operates in. i.e. consumer electronics, financial markets... "

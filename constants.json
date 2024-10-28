@@ -1,0 +1,110 @@
+{
+    "COMPANY_SIZES": [
+        {
+            "value": "micro",
+            "label": "Micro Enterprise",
+            "description": "1-9 employees, typically local or startup businesses"
+        },
+        {
+            "value": "small",
+            "label": "Small Enterprise",
+            "description": "10-49 employees, established local or regional presence"
+        },
+        {
+            "value": "medium",
+            "label": "Medium Enterprise",
+            "description": "50-249 employees, significant regional or national operations"
+        },
+        {
+            "value": "large",
+            "label": "Large Enterprise",
+            "description": "250+ employees, major national or multinational operations"
+        }
+    ],
+    "BUSINESS_SECTORS": [
+        {
+            "value": "technology",
+            "label": "Technology & Software",
+            "description": "IT services, software development, digital solutions"
+        },
+        {
+            "value": "financial",
+            "label": "Financial Services",
+            "description": "Banking, insurance, investment, and fintech"
+        },
+        {
+            "value": "healthcare",
+            "label": "Healthcare & Medical",
+            "description": "Medical services, healthcare technology, pharmaceuticals"
+        },
+        {
+            "value": "retail",
+            "label": "Retail & E-commerce",
+            "description": "Online and physical retail, consumer goods distribution"
+        },
+        {
+            "value": "manufacturing",
+            "label": "Manufacturing & Industrial",
+            "description": "Production, assembly, industrial processes"
+        },
+        {
+            "value": "education",
+            "label": "Education",
+            "description": "Educational institutions, EdTech, training services"
+        },
+        {
+            "value": "professional_services",
+            "label": "Professional Services",
+            "description": "Consulting, legal, accounting, business services"
+        },
+        {
+            "value": "media",
+            "label": "Media & Entertainment",
+            "description": "Digital media, entertainment, publishing, broadcasting"
+        },
+        {
+            "value": "energy",
+            "label": "Energy & Utilities",
+            "description": "Power generation, utilities, renewable energy"
+        }
+    ],
+    "BUSINESS_TYPES": [
+        {
+            "value": "b2b",
+            "label": "B2B (Business to Business)",
+            "description": "Products or services sold to other businesses"
+        },
+        {
+            "value": "b2c",
+            "label": "B2C (Business to Consumer)",
+            "description": "Products or services sold directly to consumers"
+        },
+        {
+            "value": "b2b2c",
+            "label": "B2B2C (Business to Business to Consumer)",
+            "description": "Serving businesses that serve consumers"
+        },
+        {
+            "value": "nonprofit",
+            "label": "Non-Profit Organization",
+            "description": "Organization that uses profits for charitable purposes"
+        },
+        {
+            "value": "charity",
+            "label": "Charity",
+            "description": "Organization focused on charitable causes and social impact"
+        },
+        {
+            "value": "education",
+            "label": "Educational Institution",
+            "description": "Schools, universities, and educational services"
+        }
+    ],
+    "EXAMPLE_COMPANY": {
+        "name": "Acme Corporation",
+        "description": "Leading manufacturer of innovative products for catching roadrunners. Known for our extensive catalog of inventions, gadgets, and devices. Our products range from simple TNT detonators to complex rocket-powered devices. Founded in 1947, we pride ourselves on our motto: \"Quality is our #1 dream.\"",
+        "sector": "manufacturing",
+        "size": "large",
+        "business_type": "b2b"
+    }
+}
