@@ -29,13 +29,14 @@ from pydantic_models import (
     CriteriaSelect,
     CriteriaSelectionResponse,
     CriteriaEvidenceResponse,
-    RemoveCriteriaRequest,
-    RemoveCriteriaResponse,
     DeleteCustomCriteriaResponse,
     UpdateCustomCriteriaRequest,
     EvidenceResponse,
     QuestionResponse,
     AnswerResponse,
+    UpdateAuditCriteriaRequest,
+    UpdateAuditCriteriaResponse,
+    MaturityLevel,
 )
 from helpers import (
     process_evidence_for_criteria,
@@ -104,14 +105,22 @@ async def get_audit_criteria(
     """Get all criteria associated with an audit"""
     audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
     verify_audit_access(db, audit_id, current_user)
-    
+
     audit_criteria = (
         db.query(AuditCriteriaDB)
         .filter(AuditCriteriaDB.audit_id == audit_id)
         .options(joinedload(AuditCriteriaDB.criteria))
         .all()
     )
-    return [ac.criteria for ac in audit_criteria]
+
+    # Create response with expected maturity levels
+    criteria_responses = []
+    for ac in audit_criteria:
+        criteria_dict = ac.criteria.__dict__
+        criteria_dict["expected_maturity_level"] = ac.expected_maturity_level
+        criteria_responses.append(criteria_dict)
+
+    return criteria_responses
 
 
 @router.post("/audits/{audit_id}/criteria/custom", response_model=CriteriaResponse)
@@ -216,114 +225,90 @@ async def delete_custom_criteria(
     )
 
 
-@router.post(
-    "/audits/{audit_id}/criteria/selected", response_model=CriteriaSelectionResponse
+@router.put(
+    "/audits/{audit_id}/criteria/selected", response_model=UpdateAuditCriteriaResponse
 )
 @authorize_company_access(
     audit_id_param="audit_id",
     required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
 )
-async def select_criteria(
+async def update_audit_criteria(
     request: Request,
     audit_id: str,
-    criteria_select: CriteriaSelect,
+    criteria_update: UpdateAuditCriteriaRequest,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    """Select criteria for an audit"""
-    audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
-    criteria = get_or_404(db, CriteriaDB, criteria_select.criteria_id, "Criterion not found")
+    """Replace all criteria selections for an audit with the provided list"""
 
-    existing_association = (
-        db.query(AuditCriteriaDB)
-        .filter(
-            AuditCriteriaDB.audit_id == audit_id,
-            AuditCriteriaDB.criteria_id == criteria_select.criteria_id,
-        )
-        .first()
-    )
-
-    if existing_association:
-        existing_association.expected_maturity_level = (
-            criteria_select.expected_maturity_level
-        )
-        db.commit()
-        return existing_association
-    else:
-        new_association = AuditCriteriaDB(
-            audit_id=audit_id,
-            criteria_id=criteria_select.criteria_id,
-            expected_maturity_level=criteria_select.expected_maturity_level,
-        )
-        db.add(new_association)
-        db.commit()
-        db.refresh(new_association)
-        return new_association
-
-
-@router.delete(
-    "/audits/{audit_id}/criteria/selected", response_model=RemoveCriteriaResponse
-)
-@authorize_company_access(
-    audit_id_param="audit_id",
-    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
-)
-async def remove_selected_criteria(
-    request: Request,
-    audit_id: str,
-    criteria_remove: RemoveCriteriaRequest,
-    db: Session = Depends(get_db),
-    current_user: UserDB = Depends(get_current_user),
-):
-    """Remove selected criteria from an audit"""
+    # Verify audit exists
     audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
 
-    existing_association = (
-        db.query(AuditCriteriaDB)
-        .filter(
-            AuditCriteriaDB.audit_id == audit_id,
-            AuditCriteriaDB.criteria_id == criteria_remove.criteria_id,
-        )
-        .first()
+    # Verify all criteria exist
+    criteria_ids = [c.criteria_id for c in criteria_update.criteria_selections]
+    existing_criteria = (
+        db.query(CriteriaDB).filter(CriteriaDB.id.in_(criteria_ids)).all()
     )
 
-    if not existing_association:
+    if len(existing_criteria) != len(criteria_ids):
+        found_ids = {c.id for c in existing_criteria}
+        missing_ids = [cid for cid in criteria_ids if cid not in found_ids]
         raise HTTPException(
-            status_code=404, detail="Criteria is not associated with this audit"
+            status_code=400,
+            detail=f"Some criteria were not found: {', '.join(missing_ids)}",
         )
 
-    db.delete(existing_association)
-    db.commit()
+    try:
+        # Remove all existing associations
+        db.query(AuditCriteriaDB).filter(AuditCriteriaDB.audit_id == audit_id).delete()
 
-    return RemoveCriteriaResponse(
-        message="Criteria successfully removed from the audit",
-        audit_id=audit_id,
-        criteria_id=criteria_remove.criteria_id,
-    )
+        # Create new associations
+        new_associations = []
+        for selection in criteria_update.criteria_selections:
+            new_association = AuditCriteriaDB(
+                audit_id=audit_id,
+                criteria_id=selection.criteria_id,
+                expected_maturity_level=selection.expected_maturity_level
+                or MaturityLevel.novice,
+            )
+            db.add(new_association)
+            new_associations.append(new_association)
 
+        db.commit()
 
-@router.post(
-    "/audits/{audit_id}/criteria/selected/actions/preselect",
-    response_model=List[CriteriaSelectionResponse],
-)
-@authorize_company_access(required_roles=[UserRole.AUDITOR])
-async def preselect_criteria(
-    request: Request,
-    audit_id: str,
-    db: Session = Depends(get_db),
-    current_user: UserDB = Depends(get_current_user),
-):
-    """Preselect criteria for an audit based on analysis"""
-    criteria_to_preselect = (
-        db.query(CriteriaDB).filter(CriteriaDB.audit_id == audit_id).limit(5).all()
-    )
+        # Refresh associations to get their IDs
+        for assoc in new_associations:
+            db.refresh(assoc)
 
-    for criteria in criteria_to_preselect:
-        criteria.selected = True
-        criteria.expected_maturity_level = "intermediate"
+        # Debug: Print the attributes of the first association
+        if new_associations:
+            print("Association attributes:", vars(new_associations[0]))
 
-    db.commit()
-    return criteria_to_preselect
+        response = UpdateAuditCriteriaResponse(
+            message="Audit criteria successfully updated",
+            audit_id=audit_id,
+            selected_criteria=[
+                CriteriaSelectionResponse.model_validate(
+                    {
+                        "id": assoc.id,
+                        "audit_id": assoc.audit_id,
+                        "criteria_id": assoc.criteria_id,
+                        "expected_maturity_level": assoc.expected_maturity_level,
+                        "created_at": assoc.created_at,
+                        "updated_at": assoc.updated_at,
+                    }
+                )
+                for assoc in new_associations
+            ],
+        )
+        return response
+
+    except Exception as e:
+        db.rollback()
+        print(f"Error details: {str(e)}")  # Add debug logging
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update audit criteria: {str(e)}"
+        )
 
 
 @router.post(

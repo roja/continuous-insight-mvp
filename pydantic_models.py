@@ -203,6 +203,7 @@ class CriteriaResponse(CriteriaBase, BaseResponseModel):
     parent_id: Optional[str]
     maturity_definitions: dict
     is_specific_to_audit: Optional[str]
+    expected_maturity_level: Optional[MaturityLevel] = None
 
 
 class CriteriaSelect(BaseRequestModel):
@@ -210,9 +211,15 @@ class CriteriaSelect(BaseRequestModel):
     expected_maturity_level: Optional[MaturityLevel] = None
 
 
-class CriteriaSelectionResponse(BaseResponseModel, AuditRelatedMixin):
+class CriteriaSelectionResponse(BaseModel):
+    id: str
+    audit_id: str
     criteria_id: str
     expected_maturity_level: Optional[MaturityLevel]
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
 # Evidence Models
@@ -329,3 +336,14 @@ class UpdateCustomCriteriaRequest(BaseRequestModel):
 # Auth Models
 class GoogleAuthRequest(BaseRequestModel):
     token: str
+
+
+# Add this new model after CriteriaSelectionResponse
+class UpdateAuditCriteriaRequest(BaseRequestModel):
+    criteria_selections: List[CriteriaSelect]
+
+
+class UpdateAuditCriteriaResponse(BaseModel):
+    message: str
+    audit_id: str
+    selected_criteria: List[CriteriaSelectionResponse]
