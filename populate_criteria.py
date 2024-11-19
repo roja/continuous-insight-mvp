@@ -15,7 +15,7 @@ from sqlalchemy.ext.declarative import declarative_base
 
 # Database setup
 engine = create_engine(
-    "sqlite:///./tech_audit.db", connect_args={"check_same_thread": False}
+    "sqlite:///./database/tech_audit.db", connect_args={"check_same_thread": False}
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

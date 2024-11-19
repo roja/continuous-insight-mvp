@@ -1,15 +1,30 @@
-FROM python:3.12.7 AS builder
+FROM python:3.12-slim
 
+# Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
+
 WORKDIR /app
 
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc python3-dev && \
+    rm -rf /var/lib/apt/lists/*
 
+# Create and activate virtual environment
 RUN python -m venv .venv
-COPY requirements.txt ./
-RUN .venv/bin/pip install -r requirements.txt
-FROM python:3.12.7-slim
-WORKDIR /app
-COPY --from=builder /app/.venv .venv/
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
 COPY . .
-CMD ["/app/.venv/bin/fastapi", "run"]
+
+# Create database directory with proper permissions
+RUN mkdir -p /app/database && \
+    chmod 777 /app/database
+
+# Run migrations and start the application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

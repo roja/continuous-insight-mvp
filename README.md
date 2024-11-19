@@ -167,7 +167,7 @@ The audit process relies on evidence gathered from multiple sources:
 Configure the following in `.env`:
 
 ```
-DATABASE_URL=sqlite:///./tech_audit.db
+DATABASE_URL=sqlite:///./database/tech_audit.db
 OPENAI_API_KEY=your_key_here
 GOOGLE_CLIENT_ID=your_id_here
 GOOGLE_CLIENT_SECRET=your_secret_here
