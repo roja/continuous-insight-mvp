@@ -164,7 +164,7 @@ def find_quote_start_position(quote: str, document: str) -> Optional[int]:
     return None
 
 
-def process_evidence_for_criteria(audit_id: str, criteria_id: str):
+def process_evidence_files_for_criteria(audit_id: str, criteria_id: str):
     """Process evidence files for specific criteria."""
     db = SessionLocal()
     try:
@@ -231,7 +231,6 @@ def process_evidence_for_criteria(audit_id: str, criteria_id: str):
         )
     finally:
         db.close()
-
 
 
 def process_raw_evidence(db_company: CompanyDB, db: Session) -> CompanyResponse:
@@ -414,14 +413,42 @@ def filter_by_user_company_access(query: Any, user: UserDB, company_join_path=No
 
     if company_join_path:
         query = query.join(company_join_path)
-        return (
-            query.join(UserCompanyAssociation, 
-                      UserCompanyAssociation.company_id == CompanyDB.id)
-            .filter(UserCompanyAssociation.user_id == user.id)
-        )
+        return query.join(
+            UserCompanyAssociation, UserCompanyAssociation.company_id == CompanyDB.id
+        ).filter(UserCompanyAssociation.user_id == user.id)
 
-    return (
-        query.join(UserCompanyAssociation, 
-                  UserCompanyAssociation.company_id == CompanyDB.id)
-        .filter(UserCompanyAssociation.user_id == user.id)
+    return query.join(
+        UserCompanyAssociation, UserCompanyAssociation.company_id == CompanyDB.id
+    ).filter(UserCompanyAssociation.user_id == user.id)
+
+
+def get_unprocessed_evidence_files_for_criteria(
+    db: Session, audit_id: str, criteria_id: str
+) -> List[EvidenceFileDB]:
+    """Get evidence files that have not been processed for a specific criteria."""
+    # Get all evidence files for the audit
+    evidence_files = (
+        db.query(EvidenceFileDB)
+        .filter(
+            EvidenceFileDB.audit_id == audit_id, EvidenceFileDB.status == "complete"
+        )
+        .all()
     )
+
+    # Filter out files that have already been processed for the criteria
+    unprocessed_files = []
+    for file in evidence_files:
+        existing_evidence = (
+            db.query(EvidenceDB)
+            .filter(
+                EvidenceDB.audit_id == audit_id,
+                EvidenceDB.criteria_id == criteria_id,
+                EvidenceDB.source == "evidence_file",
+                EvidenceDB.source_id == file.id,
+            )
+            .first()
+        )
+        if not existing_evidence:
+            unprocessed_files.append(file)
+
+    return unprocessed_files

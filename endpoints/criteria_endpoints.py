@@ -19,6 +19,7 @@ from db_models import (
     CompanyDB,
     AuditCriteriaDB,
     EvidenceDB,
+    EvidenceFileDB,
     QuestionDB,
     UserCompanyAssociation,
 )
@@ -37,14 +38,17 @@ from pydantic_models import (
     UpdateAuditCriteriaRequest,
     UpdateAuditCriteriaResponse,
     MaturityLevel,
+    DeleteAuditCriteriaResponse,
+    EvidenceFileResponse,
 )
 from helpers import (
-    process_evidence_for_criteria,
+    process_evidence_files_for_criteria,
     verify_company_access,
     verify_audit_access,
     get_or_404,
     paginate_query,
     filter_by_user_company_access,
+    get_unprocessed_evidence_files_for_criteria,
 )
 
 router = APIRouter(tags=["criteria"])
@@ -327,9 +331,23 @@ async def extract_evidence_for_criteria(
     """Extract evidence for specific criteria"""
     criteria = get_or_404(db, CriteriaDB, criteria_id, "Criteria not found")
 
-    background_tasks.add_task(process_evidence_for_criteria, audit_id, criteria_id)
+    # Check for unprocessed evidence files
+    unprocessed_files = get_unprocessed_evidence_files_for_criteria(
+        db, audit_id, criteria_id
+    )
+    if not unprocessed_files:
+        raise HTTPException(
+            status_code=400,
+            detail="No new evidence files to process for this criteria",
+        )
 
-    return {"message": "Evidence extraction started"}
+    # Add task to process evidence for each unprocessed file
+    for file in unprocessed_files:
+        background_tasks.add_task(
+            process_evidence_files_for_criteria, audit_id, criteria_id
+        )
+
+    return {"message": "Evidence extraction started for new files"}
 
 
 @router.get(
@@ -345,8 +363,17 @@ async def get_evidence_for_criteria(
     current_user: UserDB = Depends(get_current_user),
 ):
     """Get evidence and questions for specific criteria"""
+    # First, verify the audit exists and user has access
+    audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
+
+    # Modified query to properly handle the join
     evidence = (
-        db.query(EvidenceDB)
+        db.query(EvidenceDB, EvidenceFileDB.filename)
+        .outerjoin(
+            EvidenceFileDB,
+            (EvidenceDB.source_id == EvidenceFileDB.id)
+            & (EvidenceDB.source == "evidence_file"),
+        )
         .filter(EvidenceDB.audit_id == audit_id, EvidenceDB.criteria_id == criteria_id)
         .all()
     )
@@ -365,7 +392,15 @@ async def get_evidence_for_criteria(
         )
 
     response = CriteriaEvidenceResponse(
-        evidence=[EvidenceResponse.model_validate(e) for e in evidence],
+        evidence=[
+            EvidenceResponse(
+                **{
+                    **e[0].__dict__,
+                    "source_name": e[1] if e[0].source == "evidence_file" else None,
+                }
+            )
+            for e in evidence
+        ],
         questions=[
             QuestionResponse(
                 id=q.id,
@@ -378,3 +413,71 @@ async def get_evidence_for_criteria(
     )
 
     return response
+
+
+@router.delete(
+    "/audits/{audit_id}/criteria/{criteria_id}",
+    response_model=DeleteAuditCriteriaResponse,
+)
+@authorize_company_access(
+    audit_id_param="audit_id",
+    required_roles=[UserRole.AUDITOR, UserRole.ORGANISATION_LEAD],
+)
+async def delete_audit_criteria(
+    request: Request,
+    audit_id: str,
+    criteria_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    """Remove a specific criteria from an audit"""
+    # Verify audit exists
+    audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
+
+    # Find and delete the association
+    association = (
+        db.query(AuditCriteriaDB)
+        .filter(
+            AuditCriteriaDB.audit_id == audit_id,
+            AuditCriteriaDB.criteria_id == criteria_id,
+        )
+        .first()
+    )
+
+    if not association:
+        raise HTTPException(status_code=404, detail="Criteria not found in this audit")
+
+    db.delete(association)
+    db.commit()
+
+    return DeleteAuditCriteriaResponse(
+        message="Criteria successfully removed from audit",
+        audit_id=audit_id,
+        criteria_id=criteria_id,
+    )
+
+
+@router.get(
+    "/audits/{audit_id}/criteria/{criteria_id}/unextracted-evidence",
+    response_model=List[EvidenceFileResponse],
+)
+@authorize_company_access(required_roles=list(UserRole))
+async def get_unextracted_evidence_files(
+    request: Request,
+    audit_id: str,
+    criteria_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    """Get a list of unextracted evidence files for a specific criteria."""
+    unprocessed_files = get_unprocessed_evidence_files_for_criteria(
+        db, audit_id, criteria_id
+    )
+
+    if not unprocessed_files:
+        raise HTTPException(
+            status_code=404,
+            detail="No unextracted evidence files found for the given criteria and audit",
+        )
+
+    return unprocessed_files

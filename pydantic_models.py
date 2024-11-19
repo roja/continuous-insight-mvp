@@ -237,6 +237,7 @@ class EvidenceResponse(EvidenceBase, BaseResponseModel, AuditRelatedMixin):
     criteria_id: str
     evidence_type: str
     start_position: Optional[int] = None
+    source_name: Optional[str] = None
 
 
 class EvidenceFileResponse(IDMixin, AuditRelatedMixin):
@@ -245,6 +246,13 @@ class EvidenceFileResponse(IDMixin, AuditRelatedMixin):
     status: str
     uploaded_at: datetime
     processed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EvidenceFileContentResponse(BaseModel):
+    before: str = ""
+    text: str
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -347,3 +355,9 @@ class UpdateAuditCriteriaResponse(BaseModel):
     message: str
     audit_id: str
     selected_criteria: List[CriteriaSelectionResponse]
+
+
+class DeleteAuditCriteriaResponse(BaseModel):
+    message: str
+    audit_id: str
+    criteria_id: str

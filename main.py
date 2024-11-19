@@ -19,6 +19,7 @@ from endpoints import (
     questions_endpoints,
     maturity_endpoints,
     audit_endpoints,
+    ai_endpoints,
 )
 
 
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
         questions_endpoints.router,
         maturity_endpoints.router,
         audit_endpoints.router,
+        ai_endpoints.router,
     ]
 
     for router in routers:

@@ -1,0 +1,141 @@
+[
+    {
+        "section": "Product",
+        "criteria": [
+            {
+                "title": "Product Vision and Strategy",
+                "parent": null,
+                "description": "The clarity, alignment, and adaptability of the product's long-term goals and how they support the overall business objectives.",
+                "maturity_definitions": {
+                    "novice": "Product vision is unclear or inconsistently communicated. No formal strategy for aligning product goals with business objectives.",
+                    "intermediate": "Product vision is somewhat defined, with efforts made to align it with business objectives. Strategy is documented but lacks periodic updates.",
+                    "advanced": "Product vision is clearly articulated, fully aligned with business objectives, and regularly reviewed. All stakeholders understand the strategy and direction."
+                },
+                "children": [
+                    {
+                        "title": "Clear Product Vision and Roadmap",
+                        "description": "Well-defined long-term goals and purpose of the product. A documented roadmap outlining future developments.",
+                        "maturity_definitions": {
+                            "novice": "Product goals are loosely defined, and there is no formal roadmap. Future developments are addressed on an as-needed basis.",
+                            "intermediate": "Product goals are defined and communicated, with a roadmap that covers the next 6-12 months. The roadmap is reviewed occasionally.",
+                            "advanced": "Product goals are clearly defined, with a detailed roadmap extending beyond 12 months. The roadmap is actively maintained and adjusted based on changes in business or market conditions."
+                        }
+                    },
+                    {
+                        "title": "Strategic Alignment",
+                        "description": "Alignment of the product strategy with business goals and objectives. Regular review and updating of the product strategy to reflect market changes.",
+                        "maturity_definitions": {
+                            "novice": "Product strategy is not aligned with broader business objectives. No structured process to ensure alignment.",
+                            "intermediate": "Product strategy is somewhat aligned with business goals, but reviews and updates are infrequent or reactive.",
+                            "advanced": "Product strategy is fully aligned with business goals and regularly reviewed to ensure relevance. Stakeholders are involved in the alignment process, and updates are proactive based on market and business insights."
+                        }
+                    }
+                ]
+            },
+            {
+                "title": "Market Understanding and Product-Market Fit",
+                "parent": null,
+                "description": "The organization's grasp of the market landscape and how well the product meets customer needs.",
+                "maturity_definitions": {
+                    "novice": "Limited understanding of market dynamics, relying on anecdotal information. Product-market fit is unproven or undefined.",
+                    "intermediate": "Basic market analysis conducted with some metrics in place. Product-market fit is partially validated but not consistently measured.",
+                    "advanced": "Comprehensive market research is conducted regularly. Product-market fit is well established, supported by strong retention, engagement, and satisfaction metrics."
+                },
+                "children": [
+                    {
+                        "title": "Market Research and Understanding",
+                        "description": "Ongoing analysis of market trends, customer needs, and competitor offerings. Use of data to inform product decisions.",
+                        "maturity_definitions": {
+                            "novice": "Market research is ad-hoc or nonexistent, with limited awareness of trends and competitor actions.",
+                            "intermediate": "Market research is conducted periodically, focusing on customer needs and competitor analysis. Insights are sometimes used in decision-making.",
+                            "advanced": "Continuous market research is conducted, including trend analysis and competitor monitoring. Insights are systematically used to drive product decisions."
+                        }
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        "section": "Platform",
+        "criteria": [
+            {
+                "title": "System Architecture and Design",
+                "parent": null,
+                "description": "The principles and patterns that define the platform's structure, ensuring it meets current and future needs for functionality, scalability, and maintainability.",
+                "maturity_definitions": {
+                    "novice": "Architecture is monolithic with tightly coupled components. Limited consideration for scalability or maintainability. Design decisions are ad-hoc and reactive.",
+                    "intermediate": "Modular architecture with some separation of concerns. Basic considerations for scalability and maintainability. Some design patterns are implemented, but not consistently.",
+                    "advanced": "Fully modular, scalable architecture with clear separation of concerns. Proactive design decisions based on industry best practices. Highly maintainable with built-in flexibility for future needs."
+                },
+                "children": [
+                    {
+                        "title": "Modular and Layered Architecture",
+                        "description": "Use of design patterns that promote separation of concerns. Clear delineation between presentation, business logic, and data access layers.",
+                        "maturity_definitions": {
+                            "novice": "Minimal separation between layers. Most components are tightly coupled. Little to no use of design patterns.",
+                            "intermediate": "Basic layer separation implemented. Some use of design patterns, but not consistently applied across the platform.",
+                            "advanced": "Clear separation of concerns with well-defined interfaces between layers. Consistent use of appropriate design patterns throughout the platform."
+                        }
+                    },
+                    {
+                        "title": "Microservices Architecture Implementation",
+                        "description": "Adoption of microservices where appropriate for scalability and independent deployment. Assessment of microservices granularity to avoid over-fragmentation. Progress in decomposing monolithic applications into microservices.",
+                        "maturity_definitions": {
+                            "novice": "Predominantly monolithic architecture. Little to no implementation of microservices.",
+                            "intermediate": "Partial adoption of microservices. Some monolithic components remain. Inconsistent granularity in microservices design.",
+                            "advanced": "Full adoption of microservices where appropriate. Optimal granularity achieved. Monolithic applications successfully decomposed."
+                        }
+                    },
+                    {
+                        "title": "Event-Driven Architecture",
+                        "description": "Utilization of asynchronous messaging systems for decoupled communication between services. Implementation of event-driven patterns like CQRS and event sourcing where beneficial.",
+                        "maturity_definitions": {
+                            "novice": "Primarily synchronous communication. Limited or no use of event-driven patterns.",
+                            "intermediate": "Some use of asynchronous messaging. Basic implementation of event-driven patterns in select areas.",
+                            "advanced": "Extensive use of asynchronous messaging. Consistent implementation of CQRS, event sourcing, and other event-driven patterns where beneficial."
+                        }
+                    }
+                ]
+            },
+            {
+                "title": "Infrastructure and Scalability",
+                "parent": null,
+                "description": "The underlying systems and resources that support the platform, focusing on scalability, reliability, and efficient resource utilization.",
+                "maturity_definitions": {
+                    "novice": "Infrastructure is primarily on-premises or uses basic cloud services. Limited scalability and reliability measures in place.",
+                    "intermediate": "Mix of on-premises and cloud infrastructure. Basic scalability measures implemented. Some redundancy for critical systems.",
+                    "advanced": "Fully optimized cloud or hybrid infrastructure. Comprehensive scalability and reliability measures in place. Efficient resource utilization across all systems."
+                },
+                "children": [
+                    {
+                        "title": "Infrastructure Scalability",
+                        "description": "Ability to scale infrastructure horizontally and vertically to meet demand. Use of auto-scaling groups and policies.",
+                        "maturity_definitions": {
+                            "novice": "Manual scaling processes. Limited ability to handle sudden increases in demand.",
+                            "intermediate": "Basic auto-scaling implemented for some components. Mix of horizontal and vertical scaling strategies.",
+                            "advanced": "Comprehensive auto-scaling across all components. Optimal use of horizontal and vertical scaling based on application needs."
+                        }
+                    },
+                    {
+                        "title": "Cloud Service Utilization",
+                        "description": "Leveraging cloud services (IaaS, PaaS, SaaS) for flexibility and scalability. Multi-cloud or hybrid cloud strategies where appropriate. Adoption of serverless computing where beneficial.",
+                        "maturity_definitions": {
+                            "novice": "Limited use of cloud services, primarily IaaS. No multi-cloud or serverless strategies.",
+                            "intermediate": "Moderate use of cloud services including some PaaS and SaaS. Basic multi-cloud or hybrid strategies in place. Limited serverless adoption.",
+                            "advanced": "Extensive use of cloud services across IaaS, PaaS, and SaaS. Robust multi-cloud or hybrid strategies implemented. Widespread adoption of serverless computing where beneficial."
+                        }
+                    },
+                    {
+                        "title": "Containerization and Orchestration",
+                        "description": "Use of containerization technologies like Docker. Orchestration with tools like Kubernetes for managing containerized applications. Optimization and resource allocation in Kubernetes clusters.",
+                        "maturity_definitions": {
+                            "novice": "Limited or no use of containerization. No orchestration tools in place.",
+                            "intermediate": "Basic containerization implemented for some applications. Basic orchestration with limited optimization.",
+                            "advanced": "Comprehensive use of containerization across all suitable applications. Advanced orchestration with optimized resource allocation in Kubernetes clusters."
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+]

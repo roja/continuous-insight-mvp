@@ -1,15 +1,25 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile, status, BackgroundTasks, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    File,
+    UploadFile,
+    status,
+    BackgroundTasks,
+    Query,
+)
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
-from typing import List
+from typing import List, Optional
 import os
 import hashlib
 
 from database import get_db
 from db_models import UserDB, UserRole, EvidenceFileDB, AuditDB
 from auth import get_current_user, authorize_company_access
-from pydantic_models import EvidenceFileResponse
+from pydantic_models import EvidenceFileResponse, EvidenceFileContentResponse
 from helpers import (
     process_file,
     verify_audit_access,
@@ -19,6 +29,7 @@ from helpers import (
 )
 
 router = APIRouter(tags=["evidence files"])
+
 
 @router.post("/audits/{audit_id}/evidence-files", response_model=EvidenceFileResponse)
 @authorize_company_access(
@@ -41,10 +52,7 @@ async def upload_evidence_file(
     # Verify audit exists and isn't deleted
     audit = get_or_404(db, AuditDB, audit_id, "Audit not found")
     if audit.deleted_at is not None:
-        raise HTTPException(
-            status_code=404,
-            detail="Audit not found"
-        )
+        raise HTTPException(status_code=404, detail="Audit not found")
 
     # Create directory for evidence files if it doesn't exist
     evidence_dir = "evidence_files"
@@ -125,7 +133,10 @@ async def upload_evidence_file(
 
     return db_file
 
-@router.get("/audits/{audit_id}/evidence-files", response_model=List[EvidenceFileResponse])
+
+@router.get(
+    "/audits/{audit_id}/evidence-files", response_model=List[EvidenceFileResponse]
+)
 @authorize_company_access(required_roles=list(UserRole))
 async def list_evidence_files(
     request: Request,
@@ -138,17 +149,17 @@ async def list_evidence_files(
     """List all evidence files for an audit with pagination"""
     # Verify audit access
     audit = verify_audit_access(db, audit_id, current_user)
-    
+
     # Build query
     query = db.query(EvidenceFileDB).filter(EvidenceFileDB.audit_id == audit_id)
-    
+
     # Apply pagination
     files = paginate_query(query, skip, limit).all()
     return files
 
+
 @router.get(
-    "/audits/{audit_id}/evidence-files/{file_id}", 
-    response_model=EvidenceFileResponse
+    "/audits/{audit_id}/evidence-files/{file_id}", response_model=EvidenceFileResponse
 )
 @authorize_company_access(required_roles=list(UserRole))
 async def get_evidence_file(
@@ -161,20 +172,16 @@ async def get_evidence_file(
     """Get details of a specific evidence file"""
     # Verify audit access
     audit = verify_audit_access(db, audit_id, current_user)
-    
+
     # Get file or raise 404
-    file = get_or_404(
-        db, 
-        EvidenceFileDB,
-        file_id,
-        "Evidence file not found"
-    )
-    
+    file = get_or_404(db, EvidenceFileDB, file_id, "Evidence file not found")
+
     # Verify file belongs to audit
     if file.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Evidence file not found")
-        
+
     return file
+
 
 @router.get("/audits/{audit_id}/evidence-files/{file_id}/content")
 @authorize_company_access(required_roles=list(UserRole))
@@ -199,6 +206,7 @@ async def get_evidence_file_content(
 
     return FileResponse(file.file_path, filename=file.filename)
 
+
 @router.delete(
     "/audits/{audit_id}/evidence-files/{file_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -217,20 +225,12 @@ async def delete_evidence_file(
     """Delete an evidence file"""
     # Verify audit access with required roles
     audit = verify_audit_access(
-        db, 
-        audit_id, 
-        current_user, 
-        [UserRole.AUDITOR, UserRole.ORGANISATION_LEAD]
+        db, audit_id, current_user, [UserRole.AUDITOR, UserRole.ORGANISATION_LEAD]
     )
-    
+
     # Get file or raise 404
-    file = get_or_404(
-        db, 
-        EvidenceFileDB,
-        file_id,
-        "Evidence file not found"
-    )
-    
+    file = get_or_404(db, EvidenceFileDB, file_id, "Evidence file not found")
+
     # Verify file belongs to audit
     if file.audit_id != audit_id:
         raise HTTPException(status_code=404, detail="Evidence file not found")
@@ -244,6 +244,7 @@ async def delete_evidence_file(
     db.commit()
 
     return Response(status_code=204)
+
 
 @router.get(
     "/audits/{audit_id}/evidence-files/{file_id}/status",
@@ -266,3 +267,61 @@ async def check_evidence_file_status(
     if file is None:
         raise HTTPException(status_code=404, detail="Evidence file not found")
     return file
+
+
+@router.get(
+    "/audits/{audit_id}/evidence-files/{file_id}/text-content",
+    response_model=EvidenceFileContentResponse,
+)
+@authorize_company_access(required_roles=list(UserRole))
+async def get_evidence_file_text_content(
+    request: Request,
+    audit_id: str,
+    file_id: str,
+    char_position: Optional[int] = Query(None, ge=0),
+    length: Optional[int] = Query(None, ge=1),
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    """Get the text content of an evidence file, optionally centered around a specific character position"""
+    # Verify audit access
+    audit = verify_audit_access(db, audit_id, current_user)
+
+    # Get file or raise 404
+    file = get_or_404(db, EvidenceFileDB, file_id, "Evidence file not found")
+
+    # Verify file belongs to audit
+    if file.audit_id != audit_id:
+        raise HTTPException(status_code=404, detail="Evidence file not found")
+
+    if not file.text_content:
+        raise HTTPException(status_code=400, detail="File has no text content")
+
+    # If no char_position is provided, return the full content
+    if char_position is None:
+        return EvidenceFileContentResponse(text=file.text_content)
+
+    # Validate char_position is within text bounds
+    if char_position >= len(file.text_content):
+        raise HTTPException(
+            status_code=400,
+            detail="Character position exceeds text length",
+        )
+
+    # Use default length if not provided
+    if length is None:
+        length = 1000
+
+    # Calculate the start and end positions
+    half_length = length // 2
+    start = max(0, char_position - half_length)
+    end = min(len(file.text_content), char_position + half_length)
+
+    # Get the text before and at/after the character position
+    before_text = file.text_content[start:char_position]
+    main_text = file.text_content[char_position:end]
+
+    return EvidenceFileContentResponse(
+        before=before_text,
+        text=main_text,
+    )
