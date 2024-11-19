@@ -10,7 +10,7 @@ primary_region = 'lhr'
   dockerfile = "Dockerfile"
 
 [deploy]
-  release_command = "/app/.venv/bin/python -m alembic upgrade head"
+  release_command = "alembic upgrade head"
 
 [mounts]
   source = "sqlite_data"
@@ -33,7 +33,6 @@ primary_region = 'lhr'
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
 
 [env]
   PYTHONPATH = "/app"

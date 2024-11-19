@@ -19,12 +19,15 @@ ENV PATH="/app/.venv/bin:$PATH"
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code 
+# Copy application code
 COPY . .
 
 # Create database directory with proper permissions
 RUN mkdir -p /app/database && \
     chmod 777 /app/database
 
+# Install alembic explicitly in the virtual environment
+RUN pip install alembic
+
 # Run migrations and start the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
