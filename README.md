@@ -1,252 +1,320 @@
-# Continuous Insights: Technology and Product Audit System
+# Continuous Insight API
 
-© 2024 Rational Partners Advisory Ltd. All rights reserved.
+Continuous Insight API is a FastAPI-based backend service that powers the technical and product audit system. This API enables organisations to:
 
-**PROPRIETARY AND CONFIDENTIAL**
+- Conduct comprehensive technical and product maturity assessments
+- Generate data-driven insights through AI-powered analysis
+- Track and measure improvement over time
+- Manage evidence collection and validation systematically
 
-This software is proprietary and confidential. Unauthorized copying, modification, distribution, or use of any files in this repository, via any medium, is strictly prohibited.
+Built with a robust Python-based architecture, it provides RESTful endpoints for managing company audits, evidence processing, and maturity assessments.
 
-**Author:** Anthony Buck
+## 🎯 Core Features
 
-**Version:** 1.0.0 (2024)
+- **Authentication & Authorization**
+  - Google OAuth integration
+  - Role-based access control (RBAC)
+  - JWT token-based session management
+  
+- **Company Management**
+  - Company profile creation and management
+  - User-company associations
+  - Multi-tenant architecture
+  
+- **Audit Framework**
+  - Comprehensive audit lifecycle management
+  - Maturity criteria definition and assessment
+  - Evidence collection and processing
+  - Dynamic question generation
+  
+- **AI Integration**
+  - OpenAI-powered analysis with GPT-4 capabilities
+  - Automated evidence processing and classification
+  - Intelligent data extraction from multiple file formats
+  - Context-aware assessment support with historical learning
+  - Automated recommendation generation
 
-## Overview
+## 🚀 Getting Started
 
-Continuous Insights is a sophisticated system developed by Rational Partners Advisory Ltd for conducting technology and product audits across organizations of various sizes and sectors. It provides a structured approach to assessing the maturity and effectiveness of a company's technology stack, processes, and product development approaches.
+### Prerequisites
 
-## Core Concepts
+- Python 3.10 or higher
+- SQLite (development) / PostgreSQL (production)
+- OpenAI API access
+- Google OAuth credentials
 
-### The 5 Ps Framework
+### Installation
 
-The audit system is built around five key areas of assessment:
+1. Clone the repository:
 
-- Product
-- People
-- Process
-- Platform
-- Protection
-
-### Maturity Levels
-
-Each area and sub-area is assessed using three maturity levels:
-
-- Novice
-- Intermediate
-- Advanced
-
-These levels are defined specifically for each criterion to provide nuanced evaluation.
-
-### Evidence-Based Assessment
-
-The audit process relies on evidence gathered from multiple sources:
-
-- Interviews
-- Documentation
-- Code repositories
-- System logs
-- File uploads (supporting various formats)
-
-## Technical Architecture
-
-### Core Components
-
-1. **FastAPI Backend**
-   - RESTful API architecture
-   - Async support for file processing
-   - OAuth2 authentication
-   - Role-based access control
-
-2. **Database Layer**
-   - SQLAlchemy ORM
-   - SQLite database (configurable)
-   - Data model for audit tracking
-
-3. **AI Integration**
-   - OpenAI API integration for analysis
-   - Automated question generation
-   - Evidence extraction and analysis
-   - Image and document content analysis
-
-### Project Structure
-
-```
-├── main.py              # Application entry point and route definitions
-├── config.py            # Configuration settings
-├── database.py          # Database initialization and session management
-├── middleware.py        # CORS and session middleware
-├── auth.py             # Authentication and authorization
-├── helpers.py          # Utility functions and processing helpers
-├── db_models.py        # SQLAlchemy models
-└── pydantic_models.py  # Pydantic models for request/response validation
+```bash
+git clone [repository-url]
+cd continuous-insight-api
 ```
 
-### Data Model Overview
+2. Create and activate a virtual environment:
 
-#### Core Entities
+```bash
+python -m venv venv
+source venv/bin/activate  # Unix
+# or
+.\venv\Scripts\activate  # Windows
+```
 
-1. **Company**
-   - Basic company information
-   - Technology stack details
-   - Business context data
-   - Associated users and roles
+3. Install dependencies:
 
-2. **Audit**
-   - Links to company
-   - Selected criteria
-   - Evidence collection
-   - Maturity assessments
+```bash
+pip install -r requirements.txt
+```
 
-3. **Criteria**
-   - Hierarchical structure (parent/child)
-   - Maturity level definitions
-   - Section categorization
-   - Custom criteria support
+4. Create a `.env` file in the root directory:
 
-4. **Evidence**
-   - File-based evidence
-   - Text extractions
-   - Processed content
-   - Links to criteria
+```env
+# Database
+DATABASE_URL=sqlite:///./database/tech_audit.db
 
-5. **Users**
-   - OAuth authentication
-   - Role-based permissions
-   - Company associations
+# Authentication
+JWT_SECRET_KEY=your_secret_key
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
 
-## Security & Access Control
+# OpenAI
+OPENAI_API_KEY=your_openai_api_key
 
-### Authentication Methods
+# Application Settings
+ENVIRONMENT=development
+ALLOWED_ORIGINS=http://localhost:3000
+```
 
-- Google OAuth
-- Apple OAuth
-- JWT token-based sessions
+5. Initialize the database:
 
-### Role-Based Access
+```bash
+python init_db.py
+```
+
+6. Start the development server:
+
+```bash
+uvicorn main:app --reload
+```
+
+## 🏗️ Project Structure
+
+```
+continuous-insight-api/
+├── main.py                 # Application entry point
+├── config.py              # Configuration settings
+├── database.py            # Database connection management
+├── middleware.py          # CORS and authentication middleware
+├── endpoints/             # API route handlers
+│   ├── auth_endpoints.py
+│   ├── company_endpoints.py
+│   ├── audit_endpoints.py
+│   └── ...
+├── db_models/            # SQLAlchemy models
+│   ├── user.py
+│   ├── company.py
+│   ├── audit.py
+│   └── ...
+├── pydantic_models/      # Request/Response models
+├── helpers/              # Utility functions
+└── tests/               # Test suite
+```
+
+## 🔑 Core Models
+
+### User Roles
 
 - Global Administrator
 - Auditor
 - Organisation Lead
 - Organisation User
+- Delegated User
 - Observer roles
 
-## System Features
+### Maturity Levels
 
-### Dynamic Assessment
+- Novice
+- Intermediate
+- Advanced
 
-- Customizable criteria
-- Context-aware evaluations
-- AI-assisted analysis
-- Evidence processing pipeline
+## 📡 API Endpoints
 
-### File Processing Capabilities
+### Companies
 
-- Documents (.pdf, .doc, etc.)
-- Images (.jpg, .png, etc.)
-- Audio (.mp3, .wav)
-- Video (.mp4, .avi)
+- `POST /companies` - Create company
+- `GET /companies` - List companies
+- `GET /companies/{id}` - Get company details
+- `PUT /companies/{id}` - Update company
+- `DELETE /companies/{id}` - Delete company
 
-### Automated Analysis Features
+### Audits
 
-- Text extraction from documents
-- Image content analysis
-- Audio transcription
-- Video processing
-- Company information extraction
+- `POST /audits` - Create audit
+- `GET /audits` - List audits
+- `GET /audits/{id}` - Get audit details
+- `PUT /audits/{id}` - Update audit
+- `DELETE /audits/{id}` - Delete audit
 
-## Installation & Setup
+### Evidence
 
-### Environment Requirements
+- `POST /audits/{id}/evidence-files` - Upload evidence
+- `GET /audits/{id}/evidence-files` - List evidence files
+- `POST /companies/{id}/evidence` - Process evidence
 
-- Python 3.10+
-- SQLite (or compatible database)
-- OpenAI API access
-- OAuth provider credentials
-
-### Environment Variables
-
-Configure the following in `.env`:
-
-```
-DATABASE_URL=sqlite:///./database/tech_audit.db
-OPENAI_API_KEY=your_key_here
-GOOGLE_CLIENT_ID=your_id_here
-GOOGLE_CLIENT_SECRET=your_secret_here
-APPLE_CLIENT_ID=your_id_here
-APPLE_CLIENT_SECRET=your_secret_here
-JWT_SECRET_KEY=your_secret_here
-```
-
-### Installation Steps
-
-1. Clone the repository (requires authorization)
-2. Install dependencies: `pip install -r requirements.txt`
-3. Configure environment variables
-4. Initialize database: `python init_db.py`
-5. Start server: `uvicorn main:app --reload`
-
-## Deployment
+## 🚢 Deployment
 
 ### Production Setup
 
-1. Configure production database
-2. Set up SSL/TLS certificates
-3. Configure production environment variables
-4. Set up monitoring and logging
-5. Configure backup systems
+1. Configure production database:
 
-### Monitoring & Logging
+```bash
+export DATABASE_URL=your_production_db_url
+```
 
-- Application logs
-- Error tracking
-- Performance metrics
-- User activity monitoring
-- System health checks
+2. Set up environment variables:
 
-### Backup & Recovery
+```bash
+export ENVIRONMENT=production
+export ALLOWED_ORIGINS=https://your-frontend-domain.com
+```
 
-- Database backup procedures
-- System state backups
-- Recovery protocols
-- Data retention policies
+3. Run migrations:
 
-## Maintenance & Support
+```bash
+alembic upgrade head
+```
 
-### System Updates
+4. Start the production server:
 
-- Version control procedures
-- Update deployment process
-- Rollback procedures
-- Database migration handling
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+```
 
-### Troubleshooting
+### Docker Deployment
 
-- Common issues and solutions
-- Error code reference
-- Debug procedures
-- Support escalation process
+1. Build the image:
 
-### Support Contact
+```bash
+docker build -t continuous-insight-api .
+```
 
-For system support, contact:
+2. Run the container:
 
-- Technical Support: [Contact Information]
-- System Administrator: [Contact Information]
+```bash
+docker run -p 8000:8000 \
+  --env-file .env \
+  continuous-insight-api
+```
 
-## Change Log
+## 🔍 Health Monitoring
 
-### Version 1.0.0 (2024)
+The API includes a health check endpoint at `/health` that returns:
 
-- Initial release
-- Core audit functionality
-- OAuth integration
-- AI-powered analysis
-- Evidence processing system
-- Role-based access control
+- Database connection status
+- OpenAI API status
+- System uptime
+- Resource usage
 
----
+## 🧪 Testing
 
-**CONFIDENTIALITY NOTICE**
+Run the test suite:
 
-This document and the software it describes contain proprietary information belonging to Rational Partners Advisory Ltd. Access to and use of this information is strictly limited and controlled by the company. This document may not be copied, distributed, or otherwise disclosed outside of the company's facilities except under appropriate precautions and agreements for maintaining the confidential nature of the information.
+```bash
+pytest
+```
 
-© 2024 Rational Partners Advisory Ltd. All rights reserved.
+Run with coverage:
+
+```bash
+pytest --cov=app tests/
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+### Development Guidelines
+
+- Follow PEP 8 style guide
+- Write unit tests for new features
+- Update documentation for API changes
+- Validate role-based access control
+- Test evidence processing workflows
+
+## 💡 Support
+
+For support or inquiries:
+
+- Email: <hello@rational.partners>
+
+## 🔒 Security
+
+- All endpoints are protected with JWT authentication
+- Role-based access control (RBAC) for fine-grained permissions
+- Data encryption at rest and in transit
+- Regular security audits and penetration testing
+- Rate limiting and brute force protection
+- Secure file handling and validation
+
+Report security vulnerabilities to <security@rational.partners>
+
+## 📚 API Documentation
+
+Interactive API documentation is available at:
+
+- Swagger UI: `/docs`
+- ReDoc: `/redoc`
+
+The API follows RESTful principles and includes:
+
+- Comprehensive endpoint descriptions
+- Request/response examples
+- Authentication details
+- Schema definitions
+
+## 🔧 Environment Variables
+
+### Database
+
+DATABASE_URL=sqlite:///./database/tech_audit.db
+DATABASE_POOL_SIZE=20
+DATABASE_MAX_OVERFLOW=10
+
+### Authentication
+
+JWT_SECRET_KEY=your_secret_key
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+REFRESH_TOKEN_EXPIRE_DAYS=7
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+
+### OpenAI
+
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4
+OPENAI_MAX_TOKENS=2000
+
+### Application Settings
+
+ENVIRONMENT=development
+ALLOWED_ORIGINS=<http://localhost:3000>
+LOG_LEVEL=INFO
+WORKER_PROCESSES=4
+
+## 📊 Performance Monitoring
+
+The API includes comprehensive monitoring:
+
+- Prometheus metrics at `/metrics`
+- Health check endpoint at `/health`
+- Detailed logging with correlation IDs
+- Performance tracing with OpenTelemetry
+- Resource usage monitoring
+- Error rate tracking
+- Response time metrics
