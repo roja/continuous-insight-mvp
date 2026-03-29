@@ -318,3 +318,9 @@ The API includes comprehensive monitoring:
 - Resource usage monitoring
 - Error rate tracking
 - Response time metrics
+
+## 📃 License
+
+PROPRIETARY AND CONFIDENTIAL - © 2024 Rational Partners Advisory Ltd.
+This software and its documentation are protected by copyright law and international treaties.
+Unauthorized reproduction or distribution of this software, or any portion of it, may result in severe civil and criminal penalties.
